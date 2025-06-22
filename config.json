@@ -1,0 +1,7 @@
+{
+  "queues": [
+    "email",
+    "sendWhats",
+    "sms"
+  ]
+}

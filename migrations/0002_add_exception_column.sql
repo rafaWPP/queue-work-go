@@ -1,0 +1,2 @@
+ALTER TABLE queue_tasks
+ADD COLUMN exception TEXT DEFAULT NULL;
