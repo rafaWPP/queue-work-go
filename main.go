@@ -229,6 +229,50 @@ func claimNextTask(db *sql.DB, queueName string) (int, string, string, bool, err
 	return taskID, taskName, data, true, nil
 }
 
+// claimNextTaskWithToken atomically reserves a task and its execution token.
+// This opt-in path requires migration 002; the existing claimNextTask remains
+// unchanged until all worker paths are ready to enforce ownership.
+func claimNextTaskWithToken(db *sql.DB, queueName string) (int, string, string, string, bool, error) {
+	token, err := newProcessingToken()
+	if err != nil {
+		return 0, "", "", "", false, err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, "", "", "", false, err
+	}
+	defer tx.Rollback()
+
+	var taskID int
+	var taskName, data string
+	err = tx.QueryRow(`SELECT id, task_name, data FROM queue_tasks
+		WHERE status = 'pending' AND queue_name = ?
+		AND (available_at IS NULL OR available_at <= NOW())
+		ORDER BY available_at ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED`, queueName).
+		Scan(&taskID, &taskName, &data)
+	if err == sql.ErrNoRows {
+		return 0, "", "", "", false, nil
+	}
+	if err != nil {
+		return 0, "", "", "", false, err
+	}
+	result, err := tx.Exec("UPDATE queue_tasks SET status = 'processing', processing_token = ?, updated_at = NOW() WHERE id = ? AND status = 'pending'", token, taskID)
+	if err != nil {
+		return 0, "", "", "", false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, "", "", "", false, err
+	}
+	if affected != 1 {
+		return 0, "", "", "", false, fmt.Errorf("reserva com token inconsistente da tarefa %d", taskID)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, "", "", "", false, err
+	}
+	return taskID, taskName, data, token, true, nil
+}
+
 // validatedPluginPath confines job plugins to the local jobs directory.
 // Task producers must still be trusted: loading a .so executes native code.
 func validatedPluginPath(taskName string) (string, error) {
