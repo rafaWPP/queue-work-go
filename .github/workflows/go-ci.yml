@@ -46,6 +46,8 @@ jobs:
         run: go test -v . ./common ./web ./cmd/webtech
       - name: Compile core packages
         run: go build . ./common ./web ./cmd/webtech
+      - name: Validate safe local build script
+        run: bash -n scripts/build-local.sh
       - name: Build standalone example plugin
         run: go build -buildmode=plugin -o /tmp/queue-example.so ./examples/hello
       - name: Build each plugin separately
