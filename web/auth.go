@@ -19,7 +19,6 @@ import (
 const sessionCookieName = "queue_session"
 const sessionLifetime = 12 * time.Hour
 
-
 const loginWindow = 15 * time.Minute
 const loginLimit = 5
 
