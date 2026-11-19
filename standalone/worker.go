@@ -22,6 +22,8 @@ type worker struct {
  lease time.Duration
  poll time.Duration
  logger *log.Logger
+ maxAttempts int
+ retryDelay time.Duration
 }
 
 func (w *worker) run(ctx context.Context) error {
@@ -29,6 +31,7 @@ func (w *worker) run(ctx context.Context) error {
  if w.queue==""{return errors.New("worker queue is required")}
  if w.lease<time.Second{return errors.New("worker lease must be at least one second")}
  if w.poll<=0{return errors.New("worker poll interval must be positive")}
+ if w.maxAttempts<0||w.retryDelay<0{return errors.New("invalid retry policy")}
  for {
   if err:=ctx.Err();err!=nil{return nil}
   claim,found,err:=w.store.Claim(ctx,w.queue,w.lease)
@@ -68,7 +71,7 @@ func (w *worker) execute(ctx context.Context,claim queueengine.Lease) {
    if err==nil {
     if ackErr:=w.store.Complete(ctx,claim.Task.ID,claim.Token);ackErr!=nil{w.logf("complete task %s: %v",claim.Task.ID,ackErr)}
    }else{
-    if failErr:=w.store.Fail(ctx,claim.Task.ID,claim.Token,err.Error());failErr!=nil{w.logf("fail task %s: %v",claim.Task.ID,failErr)}
+    if failErr:=w.failOrRetry(ctx,claim,err);failErr!=nil{w.logf("fail/retry task %s: %v",claim.Task.ID,failErr)}
    }
    return
   case <-ticker.C:
@@ -104,4 +107,21 @@ func (r *registry) snapshot()map[string]Handler{
  out:=make(map[string]Handler,len(r.handlers))
  for name,handler:=range r.handlers{out[name]=handler}
  return out
+}
+
+func (w *worker) failOrRetry(ctx context.Context,claim queueengine.Lease,cause error) error {
+ if w.maxAttempts<=1 {return w.store.Fail(ctx,claim.Task.ID,claim.Token,cause.Error())}
+ type retryStore interface {
+  RetryOrFail(context.Context,string,string,string,int,time.Duration)(bool,error)
+ }
+ store,ok:=w.store.(retryStore)
+ if !ok{return errors.New("retry-capable storage is required")}
+ // Exponential backoff capped at one hour, without overflow.
+ delay:=w.retryDelay
+ for i:=1;i<claim.Task.Attempts;i++ {
+  if delay>=time.Hour/2 {delay=time.Hour;break}
+  delay*=2
+ }
+ _,err:=store.RetryOrFail(ctx,claim.Task.ID,claim.Token,cause.Error(),w.maxAttempts,delay)
+ return err
 }
