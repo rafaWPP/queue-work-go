@@ -4,6 +4,7 @@ import (
  "context"
  "crypto/subtle"
  "encoding/json"
+ "io"
  "errors"
  "fmt"
  "log"
@@ -49,9 +50,7 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter,r *http.Request) {
  decoder.DisallowUnknownFields()
  if err:=decoder.Decode(&request);err!=nil {http.Error(w,"invalid JSON",http.StatusBadRequest);return}
  var extra any
- if err:=decoder.Decode(&extra);!errors.Is(err,context.Canceled) && err==nil {
-  http.Error(w,"unexpected JSON after request",http.StatusBadRequest);return
- } else if err!=nil && err.Error()!="EOF" {
+ if err:=decoder.Decode(&extra);err!=io.EOF {
   http.Error(w,"invalid trailing JSON",http.StatusBadRequest);return
  }
  if request.Queue==""{request.Queue="default"}
