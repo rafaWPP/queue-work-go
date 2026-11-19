@@ -28,8 +28,8 @@ The first `go mod tidy` downloads dependencies and generates this submodule's
 
 Each invocation opens and closes the same local SQLite file. A claim returns
 a token; a different token or an expired lease cannot complete the task.
-The CLI **does not execute Go plugins**, run a persistent worker, or provide a
-dashboard yet. It only exercises the storage engine.
+The CLI can also run a persistent worker (see below), but does not execute
+legacy Go plugins or provide a dashboard yet.
 
 Do not point this CLI at a production database or run on shared network storage.
 No MariaDB schema or data is modified.
@@ -60,8 +60,8 @@ The API only listens on loopback and uses a bearer token. Do not expose it
 directly to the internet. Use a properly configured TLS reverse proxy and
 access control for remote deployments.
 
-**Important:** this is a queue storage API, not yet a background worker
-that executes plugins automatically. A client must claim and acknowledge jobs.
+**Important:** the HTTP API submits and manages jobs. Start the separate
+\`work\` command for automatic execution of registered handlers.
 
 ## Automatic worker (experimental)
 
@@ -89,8 +89,8 @@ commands, dynamic scripts and legacy `.so` plugins are **not** executed
 by this worker. The worker retries failed handlers up to 3 total attempts by default, using
 exponential backoff (1s, 2s, ... capped at 1h). Configure with
 \`-max-attempts\` and \`-retry-delay\`. Unknown handler names are marked
-failed immediately. A dead-letter queue and operator-driven replay are not
-yet implemented.
+failed immediately. A dead-letter queue is not yet implemented; operator-driven replay is
+available through the inspection API below.
 
 Handlers must honor context cancellation. If a worker crashes or loses its
 lease, a task may execute again; external side effects must be idempotent.
@@ -129,3 +129,5 @@ curl -X POST http://127.0.0.1:8088/v1/tasks/list \
 
 Replay should only be used after resolving the underlying failure. The
 API does not provide pagination or an administrative dashboard yet.
+
+See [INTEGRATION.md](INTEGRATION.md) for Go, PHP and Python job producer examples.
