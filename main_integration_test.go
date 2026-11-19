@@ -2,8 +2,8 @@ package main
 
 import (
 	"database/sql"
-	"strings"
 	"fmt"
+	"strings"
 	"os"
 	"sync"
 	"testing"
