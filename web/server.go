@@ -1,6 +1,7 @@
 package web
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -102,10 +103,14 @@ func getDSN() string {
 // checkAuth verifica se o parâmetro "auth" da URL corresponde à chave definida no ambiente.
 func checkAuth(w http.ResponseWriter, r *http.Request) bool {
 	secret := os.Getenv("AUTH")
-	if r.URL.Query().Get("auth") != secret {
+	provided := r.URL.Query().Get("auth")
+	// Compatibilidade temporaria com links existentes; migrar para sessoes.
+	if secret == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) != 1 {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	return true
 }
 
