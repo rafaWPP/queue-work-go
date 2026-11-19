@@ -1,4 +1,4 @@
-module go-queue-standalone
+module go-queue/standalone
 
 go 1.22.2
 
