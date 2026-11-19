@@ -45,9 +45,13 @@ for file in jobs/*.go jobs/mk/*.go; do
 done
 ```
 
+## Safe local setup
+
+See [QUICKSTART.md](QUICKSTART.md) for a disposable MariaDB environment and a build script that does not install system services.
+
 ## Current limitations
 
 - MariaDB 10.11 is the initial CI target, not a verified compatibility matrix.
 - Concurrency tests verify task claiming, not exactly-once delivery after network failures.
-- The web panel still uses a query-string secret. Do not expose it publicly.
+- The experimental web panel uses signed sessions and POST-only destructive actions; do not expose it publicly before a security review and trusted HTTPS proxy setup.
 - The test database must remain isolated from real customer information.
