@@ -134,3 +134,26 @@ func ownerResult(result sql.Result,err error) error {
 func (s *Store) Close() error {return s.db.Close()}
 
 var _ queueengine.Store = (*Store)(nil)
+
+
+// RetryOrFail atomically schedules a bounded retry, or permanently fails the
+// task when maxAttempts has been reached. Only the current lease owner may
+// perform this transition. Attempts counts claims, including lease recoveries.
+func (s *Store) RetryOrFail(ctx context.Context,id,token,reason string,maxAttempts int,delay time.Duration) (bool,error) {
+ if id==""||token=="" {return false,queueengine.ErrNotOwner}
+ if maxAttempts<1||delay<0{return false,errors.New("invalid retry policy")}
+ now:=time.Now().UnixMilli()
+ available:=time.Now().Add(delay).UnixMilli()
+ result,err:=s.db.ExecContext(ctx,`UPDATE tasks SET
+ status=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,
+ available_at_ms=CASE WHEN attempts>=? THEN available_at_ms ELSE ? END,
+ processing_token=NULL,lease_expires_at_ms=NULL,
+ updated_at_ms=?,last_error=?
+ WHERE id=? AND status='processing' AND processing_token=?
+ AND lease_expires_at_ms>?`,
+ maxAttempts,maxAttempts,available,now,reason,id,token,now)
+ if err:=ownerResult(result,err);err!=nil{return false,err}
+ // A successfully released lease may have been rescheduled or terminally
+ // failed; the worker does not need to distinguish these outcomes.
+ return true,nil
+}
