@@ -10,7 +10,7 @@ Esta branch contém alterações experimentais que precisam ser testadas antes d
 
 ## Autenticação do painel
 
-O painel ainda aceita `?auth=` por compatibilidade com o sistema existente. **Isso não é uma solução de autenticação segura**: a chave pode aparecer em logs, histórico e URLs copiadas. O próximo passo é implementar sessão via cookie `HttpOnly`, `Secure`, `SameSite` e proteção CSRF para ações destrutivas, removendo a chave da URL.
+A branch experimental substituiu `?auth=` por login via POST e cookie de sessão HMAC com expiração de 12 horas. Ações destrutivas exigem POST e validação do cabeçalho `Origin`. O cookie utiliza `HttpOnly` e `SameSite=Strict`; o atributo `Secure` depende da detecção de HTTPS. **Use um proxy reverso confiável que controle `X-Forwarded-Proto` e preserve `Host`, e configure HTTPS.** Não exponha diretamente à internet antes de uma revisão de segurança. O segredo `AUTH` deve ser forte e sua troca invalida todas as sessões. Esta alteração ainda requer validação do workflow e testes de implantação.
 
 ## Reserva de tarefas
 
@@ -22,4 +22,4 @@ A rotina que marca tarefas `processing` antigas como falhas pode afetar jobs leg
 
 ## Licenciamento
 
-O repositório ainda precisa de uma licença open source escolhida pelo proprietário. Não foi adicionada uma licença automaticamente, pois a escolha determina direitos e obrigações de terceiros.
+O projeto utiliza a licença MIT, conforme o arquivo [LICENSE](LICENSE). Certifique-se de que todos os componentes publicados possam ser distribuídos sob essa licença.
