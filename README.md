@@ -70,6 +70,7 @@ Use variáveis de ambiente para `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_
 
 ## Estado do projeto e roadmap
 
+- [x] Testes unitários iniciais da autenticação e workflow de CI (execução ainda não verificada)
 - [ ] Testes automatizados de concorrência e integração com MariaDB
 - [ ] Sessões seguras no painel, sem token em URL
 - [ ] Política documentada de retry, heartbeat e idempotência
@@ -85,3 +86,13 @@ Issues, discussões técnicas e pull requests são bem-vindos. Veja `CONTRIBUTIN
 ## Licença
 
 Licenciado sob a **MIT License**. Consulte o arquivo [LICENSE](LICENSE).
+
+## Integração contínua
+
+A branch de melhorias inclui o workflow [Go CI](.github/workflows/go-ci.yml), com testes e compilação de pacotes. **A existência do workflow não confirma que ele já passou:** consulte a aba Actions do GitHub para conferir a execução. Ainda faltam testes reais de integração com MariaDB e de concorrência.
+
+## Limites de segurança e confiabilidade
+
+- A reserva transacional de tarefas reduz corridas entre workers, mas não garante execução exatamente uma vez após falhas externas.
+- O painel ainda usa segredo na URL por compatibilidade. Não o exponha publicamente.
+- Jobs com efeitos externos devem ser idempotentes e precisam de testes isolados.
