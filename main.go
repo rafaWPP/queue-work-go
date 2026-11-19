@@ -393,19 +393,49 @@ func processNonConfiguredQueue(db *sql.DB, queueName string) {
 			logError(formatJobLog(taskName, fmt.Sprintf("%s FAIL", formatDuration(elapsed))))
 			// Não deleta o registro em caso de falha.
 		} else {
-			// Insere o registro na tabela de histórico (queue_tasks_completed)
-			_, err = db.Exec(`INSERT INTO queue_tasks_completed (queue_task_id, queue_name, task_name, data, status, completed_at)
-			VALUES (?, ?, ?, ?, ?, NOW())`, taskID, queueName, taskName, data, "completed")
-			if err != nil {
-				logError("Erro ao inserir registro em queue_tasks_completed: %v", err)
-			}
-			logInfo(formatJobLog(taskName, fmt.Sprintf("%s DONE", formatDuration(elapsed))))
-			_, err = db.Exec("DELETE FROM queue_tasks WHERE id = ?", taskID)
-			if err != nil {
-				logError("Erro ao deletar tarefa %d da fila %s (não configurada): %v", taskID, queueName, err)
+			// Archive and delete atomically, but only if the task is still processing.
+			// This prevents an old worker from deleting a task recovered as failed.
+			if err := archiveCompletedTask(db, taskID, queueName, taskName, data); err != nil {
+				logError("Erro ao arquivar tarefa %d da fila %s: %v", taskID, queueName, err)
+			} else {
+				logInfo(formatJobLog(taskName, fmt.Sprintf("%s DONE", formatDuration(elapsed))))
 			}
 		}
 	}
+}
+
+// archiveCompletedTask keeps history insertion and task deletion in one transaction.
+func archiveCompletedTask(db *sql.DB, taskID int, queueName, taskName, data string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var status string
+	err = tx.QueryRow("SELECT status FROM queue_tasks WHERE id = ? FOR UPDATE", taskID).Scan(&status)
+	if err != nil {
+		return err
+	}
+	if status != "processing" {
+		return fmt.Errorf("tarefa %d nao esta mais em processing (status: %s)", taskID, status)
+	}
+	if _, err := tx.Exec(`INSERT INTO queue_tasks_completed (queue_task_id, queue_name, task_name, data, status, completed_at)
+		VALUES (?, ?, ?, ?, ?, NOW())`, taskID, queueName, taskName, data, "completed"); err != nil {
+		return err
+	}
+	result, err := tx.Exec("DELETE FROM queue_tasks WHERE id = ? AND status = 'processing'", taskID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("tarefa %d nao foi removida durante arquivamento", taskID)
+	}
+	return tx.Commit()
 }
 
 func recoverStuckProcessingTasks(db *sql.DB, maxAge time.Duration) {
