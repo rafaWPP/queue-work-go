@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"strings"
 	"fmt"
 	"os"
 	"sync"
@@ -18,11 +19,30 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 	if dsn == "" {
 		t.Skip("set QUEUE_TEST_DSN for MariaDB integration tests")
 	}
+	// Fail closed unless the caller explicitly opts in to destructive tests.
+	if os.Getenv("QUEUE_TEST_ALLOW_DESTRUCTIVE") != "yes" {
+		t.Skip("set QUEUE_TEST_ALLOW_DESTRUCTIVE=yes only for a disposable test database")
+	}
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	// Validate the actual selected schema, not a potentially misleading DSN string.
+	var schema string
+	if err := db.QueryRow("SELECT DATABASE()").Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(strings.ToLower(schema), "queue_test") {
+		t.Fatalf("refusing destructive integration test on database %q: require queue_test* schema", schema)
+	}
+	var existing int
+	if err := db.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'queue_tasks'").Scan(&existing); err != nil {
+		t.Fatal(err)
+	}
+	if existing != 0 {
+		t.Fatal("refusing to overwrite an existing queue_tasks table: use an empty disposable test database")
+	}
 	if err := db.Ping(); err != nil {
 		t.Fatal(err)
 	}
