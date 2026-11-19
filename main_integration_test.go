@@ -55,6 +55,7 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 		task_name VARCHAR(255) NOT NULL,
 		data TEXT,
 		status ENUM('pending','processing','completed','failed') DEFAULT 'pending',
+		exception TEXT NULL,
 		available_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
