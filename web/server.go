@@ -1366,6 +1366,7 @@ const baseTemplate = `
           <a href="/queues_failed" class="{{if eq .Page "failed"}}active{{end}}">Falhas</a>
           <a href="/queues_completed" class="{{if eq .Page "completed"}}active{{end}}">Concluídas</a>
           <button onclick="location.reload()">Atualizar</button>
+          <form method="post" action="/logout" style="margin:0"><button type="submit">Sair</button></form>
         </div>
       </div>
     </aside>
