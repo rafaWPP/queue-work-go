@@ -9,6 +9,8 @@ import (
  "fmt"
  "log"
  "os"
+ "os/signal"
+ "syscall"
  "time"
 
  _ "github.com/mattn/go-sqlite3"
@@ -70,7 +72,9 @@ func run(ctx context.Context, args []string) error {
 }
 
 func main(){
- if err:=run(context.Background(),os.Args[1:]);err!=nil{
+ ctx,stop:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM)
+ defer stop()
+ if err:=run(ctx,os.Args[1:]);err!=nil{
   fmt.Fprintln(os.Stderr,"queue-standalone:",err)
   os.Exit(1)
  }
