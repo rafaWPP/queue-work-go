@@ -33,6 +33,8 @@ func run(ctx context.Context, args []string) error {
  addr:=flags.String("listen","127.0.0.1:8088","loopback HTTP address")
  apiKey:=flags.String("api-key","","API key (prefer QUEUE_API_KEY environment variable)")
  poll:=flags.Duration("poll",500*time.Millisecond,"worker polling interval")
+ maxAttempts:=flags.Int("max-attempts",3,"maximum total claims before permanent failure")
+ retryDelay:=flags.Duration("retry-delay",time.Second,"initial retry backoff")
  if err:=flags.Parse(args[1:]);err!=nil{return err}
  switch command {case "serve","work","enqueue","claim","renew","complete","fail": default:return fmt.Errorf("unknown command %q",command)}
  if command=="serve" {
@@ -48,7 +50,7 @@ func run(ctx context.Context, args []string) error {
    "builtin/noop":func(context.Context,[]byte)error{return nil},
    "builtin/log":func(_ context.Context,payload []byte)error{log.Printf("processed log task (%d bytes)",len(payload));return nil},
   }
-  return (&worker{store:store,queue:*queue,handlers:handlers,lease:*lease,poll:*poll,logger:log.Default()}).run(ctx)
+  return (&worker{store:store,queue:*queue,handlers:handlers,lease:*lease,poll:*poll,maxAttempts:*maxAttempts,retryDelay:*retryDelay,logger:log.Default()}).run(ctx)
  }
  switch command {
  case "enqueue":
