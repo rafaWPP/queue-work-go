@@ -227,4 +227,24 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 	if recovered < 2 {
 		t.Fatalf("expected stale processing tasks to be recovered; found %d failed tasks", recovered)
 	}
+	// A recovered job must not be completed by a worker that finished late.
+	var recoveredID int
+	if err := db.QueryRow("SELECT id FROM queue_tasks WHERE status = 'failed' ORDER BY id LIMIT 1").Scan(&recoveredID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.Exec("UPDATE queue_tasks SET status = 'completed', exception = NULL, updated_at = NOW() WHERE id = ? AND status = 'processing'", recoveredID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		t.Fatal(err)
+	} else if affected != 0 {
+		t.Fatalf("late worker modified %d recovered tasks", affected)
+	}
+	if err := db.QueryRow("SELECT status FROM queue_tasks WHERE id = ?", recoveredID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" {
+		t.Fatalf("late completion overwrote recovered task with %q", status)
+	}
 }
