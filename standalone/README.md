@@ -62,3 +62,33 @@ access control for remote deployments.
 
 **Important:** this is a queue storage API, not yet a background worker
 that executes plugins automatically. A client must claim and acknowledge jobs.
+
+## Automatic worker (experimental)
+
+In a second terminal, run:
+
+```bash
+./queue-standalone work -db ./queue.db -queue default -lease 30s -poll 500ms
+```
+
+The worker claims tasks, runs a **registered** handler, renews the lease
+while the handler runs, and acknowledges success or failure. This first
+version deliberately includes only safe demonstration handlers:
+
+- `builtin/noop`: completes without side effects
+- `builtin/log`: logs that a task was processed, without printing its payload
+
+To exercise it:
+
+```bash
+./queue-standalone enqueue -db ./queue.db -name builtin/log -payload hello
+```
+
+Custom application jobs require registering handlers in Go; arbitrary
+commands, dynamic scripts and legacy `.so` plugins are **not** executed
+by this worker. Failed tasks currently enter a terminal failed state; retry
+policies and dead-letter queues are not yet implemented.
+
+Handlers must honor context cancellation. If a worker crashes or loses its
+lease, a task may execute again; external side effects must be idempotent.
+This is **at-least-once**, not exactly-once, processing.
