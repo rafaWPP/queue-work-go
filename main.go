@@ -97,6 +97,11 @@ func runMigrations(db *sql.DB) error {
 
 	for _, file := range migrationFiles {
 		migrationName := file.Name()
+		// Migration 002 is preparatory: do not alter existing databases until
+		// all worker paths enforce processing_token and rollout is approved.
+		if migrationName == "002_add_processing_token.sql" {
+			continue
+		}
 		var exists int
 		err = db.QueryRow("SELECT COUNT(*) FROM migrations_go WHERE migration = ?", migrationName).Scan(&exists)
 		if err != nil {
