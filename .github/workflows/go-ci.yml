@@ -46,6 +46,8 @@ jobs:
         run: go test -v . ./common ./web ./cmd/webtech
       - name: Compile core packages
         run: go build . ./common ./web ./cmd/webtech
+      - name: Build standalone example plugin
+        run: go build -buildmode=plugin -o /tmp/queue-example.so ./examples/hello
       - name: Build each plugin separately
         run: |
           for file in jobs/*.go jobs/mk/*.go; do
