@@ -2477,8 +2477,6 @@ func Start() {
 	if port == "" {
 		port = "9090"
 	}
-	auth := os.Getenv("AUTH")
-
 	// Se a variável DOMAIN estiver definida, usa-a; caso contrário, detecta o IP local.
 	domain := os.Getenv("DOMAIN")
 	if domain == "" {
@@ -2487,13 +2485,13 @@ func Start() {
 
 	// Imprime a URL de acesso
 	fmt.Printf("Servidor web rodando na porta %s\n", port)
-	fmt.Printf("Acesse: http://%s:%s/?auth=%s\n", domain, port, auth)
+	fmt.Printf("Painel: http://%s:%s/ (configure AUTH; nao inclua segredos em logs)\n", domain, port)
 
 	http.HandleFunc("/logo-queu.png", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "/home/newgestor-npanel/htdocs/queue-work-go/web/logo-queu.png")
+		http.ServeFile(w, r, "web/logo-queu.png")
 	})
 	http.HandleFunc("/queue-icon.png", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "/home/newgestor-npanel/htdocs/queue-work-go/web/queue-icon.png")
+		http.ServeFile(w, r, "web/queue-icon.png")
 	})
 
 	// Rotas de visualização
