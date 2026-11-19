@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
 	"testing"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
