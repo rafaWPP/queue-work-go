@@ -130,4 +130,75 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 	if staleProcessing != 0 {
 		t.Errorf("%d freshly claimed tasks still have stale timestamps", staleProcessing)
 	}
+	// Archiving without a history table must fail without deleting the task.
+	var sampleID int
+	if err := db.QueryRow("SELECT id FROM queue_tasks WHERE status = 'processing' ORDER BY id LIMIT 1").Scan(&sampleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := archiveCompletedTask(db, sampleID, "integration", "example", "sample"); err == nil {
+		t.Fatal("expected archive failure when history table is absent")
+	}
+	var status string
+	if err := db.QueryRow("SELECT status FROM queue_tasks WHERE id = ?", sampleID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "processing" {
+		t.Fatalf("archive failure changed task status to %q", status)
+	}
+
+	_, err = db.Exec(`CREATE TABLE queue_tasks_completed (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		queue_task_id INT NOT NULL,
+		queue_name VARCHAR(255) NOT NULL,
+		task_name VARCHAR(255) NOT NULL,
+		data TEXT,
+		status VARCHAR(32) NOT NULL,
+		completed_at TIMESTAMP NOT NULL
+	) ENGINE=InnoDB`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DROP TABLE IF EXISTS queue_tasks_completed") })
+
+	// A recovered task must not be archived or deleted by a stale worker.
+	if _, err := db.Exec("UPDATE queue_tasks SET status = 'failed' WHERE id = ?", sampleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := archiveCompletedTask(db, sampleID, "integration", "example", "sample"); err == nil {
+		t.Fatal("expected archive to reject recovered task")
+	}
+	var historyCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM queue_tasks_completed WHERE queue_task_id = ?", sampleID).Scan(&historyCount); err != nil {
+		t.Fatal(err)
+	}
+	if historyCount != 0 {
+		t.Fatal("recovered task was incorrectly added to history")
+	}
+	if err := db.QueryRow("SELECT status FROM queue_tasks WHERE id = ?", sampleID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" {
+		t.Fatalf("recovered task unexpectedly changed to %q", status)
+	}
+
+	var activeID int
+	if err := db.QueryRow("SELECT id FROM queue_tasks WHERE status = 'processing' ORDER BY id LIMIT 1").Scan(&activeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := archiveCompletedTask(db, activeID, "integration", "example", "sample"); err != nil {
+		t.Fatalf("archive of active task failed: %v", err)
+	}
+	var remaining int
+	if err := db.QueryRow("SELECT COUNT(*) FROM queue_tasks WHERE id = ?", activeID).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatal("archived task was not deleted")
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM queue_tasks_completed WHERE queue_task_id = ?", activeID).Scan(&historyCount); err != nil {
+		t.Fatal(err)
+	}
+	if historyCount != 1 {
+		t.Fatalf("expected one history entry, got %d", historyCount)
+	}
 }
