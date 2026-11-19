@@ -228,6 +228,32 @@ func claimNextTask(db *sql.DB, queueName string) (int, string, string, bool, err
 	return taskID, taskName, data, true, nil
 }
 
+// validatedPluginPath confines job plugins to the local jobs directory.
+// Task producers must still be trusted: loading a .so executes native code.
+func validatedPluginPath(taskName string) (string, error) {
+	if taskName == "" || filepath.IsAbs(taskName) || strings.Contains(taskName, "\\") || strings.Contains(taskName, ":") {
+		return "", fmt.Errorf("nome de plugin invalido")
+	}
+	clean := filepath.Clean(taskName)
+	if clean != taskName || clean == "." || strings.HasPrefix(clean, "..") {
+		return "", fmt.Errorf("caminho de plugin invalido")
+	}
+	if !strings.HasPrefix(clean, "jobs/") {
+		return "", fmt.Errorf("plugin fora do diretorio jobs")
+	}
+	for _, part := range strings.Split(clean, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("segmento de plugin invalido")
+		}
+		for _, c := range part {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+				return "", fmt.Errorf("caractere de plugin invalido")
+			}
+		}
+	}
+	return clean + ".so", nil
+}
+
 // processQueue processa uma tarefa de uma fila configurada.
 func processQueue(db *sql.DB, queueName string) {
 	taskID, taskName, data, found, err := claimNextTask(db, queueName)
@@ -242,7 +268,11 @@ func processQueue(db *sql.DB, queueName string) {
 	startTime := time.Now()
 	logInfo(formatJobLog(taskName, "RUNNING"))
 
-	pluginPath := fmt.Sprintf("%s.so", taskName)
+	pluginPath, err := validatedPluginPath(taskName)
+	if err != nil {
+		common.LogJobError(db, taskID, taskName, err)
+		return
+	}
 	p, err := plugin.Open(pluginPath)
 	if err != nil {
 		common.LogJobError(db, taskID, taskName, fmt.Errorf("erro ao abrir plugin %s: %v", pluginPath, err))
@@ -298,7 +328,14 @@ func processNonConfiguredQueue(db *sql.DB, queueName string) {
 
 		startTime := time.Now()
 		logInfo(formatJobLog(taskName, "RUNNING"))
-		pluginPath := fmt.Sprintf("%s.so", taskName)
+		pluginPath, err := validatedPluginPath(taskName)
+		if err != nil {
+			_, updateErr := db.Exec("UPDATE queue_tasks SET status = 'failed', exception = ? WHERE id = ?", err.Error(), taskID)
+			if updateErr != nil {
+				logError("Erro ao registrar plugin invalido para tarefa %d: %v", taskID, updateErr)
+			}
+			continue
+		}
 		var processingError error
 		p, err := plugin.Open(pluginPath)
 		if err != nil {
