@@ -7,6 +7,8 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"net/http"
+	"net"
+	"sync"
 	"net/url"
 	"os"
 	"strconv"
@@ -16,6 +18,53 @@ import (
 
 const sessionCookieName = "queue_session"
 const sessionLifetime = 12 * time.Hour
+
+
+const loginWindow = 15 * time.Minute
+const loginLimit = 5
+
+type loginFailure struct {
+ count int
+ expires time.Time
+}
+var loginGuard = struct {
+ sync.Mutex
+ failures map[string]loginFailure
+}{failures: make(map[string]loginFailure)}
+
+func loginPeer(r *http.Request) string {
+ host, _, err := net.SplitHostPort(r.RemoteAddr)
+ if err != nil { return r.RemoteAddr }
+ return host
+}
+
+func loginBlocked(peer string, now time.Time) bool {
+ loginGuard.Lock()
+ defer loginGuard.Unlock()
+ entry := loginGuard.failures[peer]
+ return now.Before(entry.expires) && entry.count >= loginLimit
+}
+
+func loginFailed(peer string, now time.Time) {
+ loginGuard.Lock()
+ defer loginGuard.Unlock()
+ if len(loginGuard.failures) >= 10000 {
+  for key, entry := range loginGuard.failures {
+   if !now.Before(entry.expires) { delete(loginGuard.failures, key) }
+  }
+  if len(loginGuard.failures) >= 10000 { return }
+ }
+ entry := loginGuard.failures[peer]
+ if !now.Before(entry.expires) { entry = loginFailure{expires: now.Add(loginWindow)} }
+ entry.count++
+ loginGuard.failures[peer] = entry
+}
+
+func loginSucceeded(peer string) {
+ loginGuard.Lock()
+ delete(loginGuard.failures, peer)
+ loginGuard.Unlock()
+}
 
 // Sessions are signed using AUTH. Changing AUTH invalidates all sessions.
 func sessionSignature(secret, payload string) string {
@@ -93,6 +142,12 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
+	peer := loginPeer(r)
+	if loginBlocked(peer, time.Now()) {
+		w.Header().Set("Retry-After", "900")
+		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Invalid form", http.StatusBadRequest)
@@ -101,9 +156,11 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	secret := os.Getenv("AUTH")
 	provided := r.PostForm.Get("password")
 	if secret == "" || subtle.ConstantTimeCompare([]byte(secret), []byte(provided)) != 1 {
+		loginFailed(peer, time.Now())
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	loginSucceeded(peer)
 	token, err := newSession(secret, time.Now())
 	if err != nil {
 		http.Error(w, "Session unavailable", http.StatusInternalServerError)
