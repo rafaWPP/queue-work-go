@@ -7,7 +7,6 @@ import (
  "errors"
  "flag"
  "fmt"
- "log"
  "os"
  "os/signal"
  "syscall"
@@ -46,10 +45,8 @@ func run(ctx context.Context, args []string) error {
  if err!=nil{return err}
  defer store.Close()
  if command=="work" {
-  handlers:=map[string]Handler{
-   "builtin/noop":func(context.Context,[]byte)error{return nil},
-   "builtin/log":func(_ context.Context,payload []byte)error{log.Printf("processed log task (%d bytes)",len(payload));return nil},
-  }
+  handlers,err:=defaultHandlers()
+  if err!=nil{return err}
   return (&worker{store:store,queue:*queue,handlers:handlers,lease:*lease,poll:*poll,maxAttempts:*maxAttempts,retryDelay:*retryDelay,logger:log.Default()}).run(ctx)
  }
  switch command {
