@@ -86,9 +86,22 @@ To exercise it:
 
 Custom application jobs require registering handlers in Go; arbitrary
 commands, dynamic scripts and legacy `.so` plugins are **not** executed
-by this worker. Failed tasks currently enter a terminal failed state; retry
-policies and dead-letter queues are not yet implemented.
+by this worker. The worker retries failed handlers up to 3 total attempts by default, using
+exponential backoff (1s, 2s, ... capped at 1h). Configure with
+\`-max-attempts\` and \`-retry-delay\`. Unknown handler names are marked
+failed immediately. A dead-letter queue and operator-driven replay are not
+yet implemented.
 
 Handlers must honor context cancellation. If a worker crashes or loses its
 lease, a task may execute again; external side effects must be idempotent.
 This is **at-least-once**, not exactly-once, processing.
+
+### Retry policy
+
+```bash
+./queue-standalone work -db ./queue.db -max-attempts 5 -retry-delay 2s
+```
+
+A task that fails is returned to pending with a future availability timestamp.
+Once the maximum number of claims is reached, it is marked failed. Retries
+preserve ownership fencing; expired workers cannot reschedule a task.
