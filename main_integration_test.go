@@ -56,6 +56,7 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 		data TEXT,
 		status ENUM('pending','processing','completed','failed') DEFAULT 'pending',
 		exception TEXT NULL,
+		processing_token CHAR(36) NULL,
 		available_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -131,6 +132,32 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 	if staleProcessing != 0 {
 		t.Errorf("%d freshly claimed tasks still have stale timestamps", staleProcessing)
 	}
+	// Token-aware claim must reserve a pending task with a durable, unique token.
+	if _, err := db.Exec("INSERT INTO queue_tasks (queue_name, task_name, data, status) VALUES ('token-integration', 'example', 'token-data', 'pending')"); err != nil {
+		t.Fatal(err)
+	}
+	tokenID, tokenName, tokenData, token, found, err := claimNextTaskWithToken(db, "token-integration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || tokenID == 0 || tokenName != "example" || tokenData != "token-data" || token == "" {
+		t.Fatalf("invalid token claim: id=%d found=%t token=%q", tokenID, found, token)
+	}
+	var storedToken, tokenStatus string
+	if err := db.QueryRow("SELECT processing_token, status FROM queue_tasks WHERE id = ?", tokenID).Scan(&storedToken, &tokenStatus); err != nil {
+		t.Fatal(err)
+	}
+	if storedToken != token || tokenStatus != "processing" {
+		t.Fatalf("token claim not persisted atomically: token=%q status=%q", storedToken, tokenStatus)
+	}
+	_, _, _, _, found, err = claimNextTaskWithToken(db, "token-integration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Fatal("second worker reserved an already claimed token task")
+	}
+
 	// Archiving without a history table must fail without deleting the task.
 	var sampleID int
 	if err := db.QueryRow("SELECT id FROM queue_tasks WHERE status = 'processing' ORDER BY id LIMIT 1").Scan(&sampleID); err != nil {
