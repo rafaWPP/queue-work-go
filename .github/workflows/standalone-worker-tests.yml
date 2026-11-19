@@ -19,9 +19,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: standalone/go.mod
-          cache-dependency-path: |
-            go.sum
-            standalone/go.sum
-      - name: Run standalone tests
+          cache: false
+      - name: Run standalone tests with race detection
         working-directory: standalone
-        run: go test -race -count=1 ./...
+        run: go test -mod=mod -race -count=1 ./...
