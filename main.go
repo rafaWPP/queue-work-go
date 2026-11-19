@@ -254,6 +254,32 @@ func validatedPluginPath(taskName string) (string, error) {
 	return clean + ".so", nil
 }
 
+// runWithHeartbeat keeps the processing timestamp fresh while Handle is running.
+// The heartbeat stops when Handle returns; it never changes a task's status.
+func runWithHeartbeat(db *sql.DB, taskID int, job common.Job) error {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if _, err := db.Exec("UPDATE queue_tasks SET updated_at = NOW() WHERE id = ? AND status = 'processing'", taskID); err != nil {
+					logError("Erro no heartbeat da tarefa %d: %v", taskID, err)
+				}
+			}
+		}
+	}()
+	err := job.Handle()
+	close(stop)
+	<-done
+	return err
+}
+
 // processQueue processa uma tarefa de uma fila configurada.
 func processQueue(db *sql.DB, queueName string) {
 	taskID, taskName, data, found, err := claimNextTask(db, queueName)
@@ -297,7 +323,7 @@ func processQueue(db *sql.DB, queueName string) {
 		return
 	}
 
-	processingError := job.Handle()
+	processingError := runWithHeartbeat(db, taskID, job)
 	elapsed := time.Since(startTime)
 
 	if processingError != nil {
@@ -353,7 +379,7 @@ func processNonConfiguredQueue(db *sql.DB, queueName string) {
 					if job == nil {
 						processingError = fmt.Errorf("erro ao criar instância do job %s", taskName)
 					} else {
-						processingError = job.Handle()
+						processingError = runWithHeartbeat(db, taskID, job)
 					}
 				}
 			}
