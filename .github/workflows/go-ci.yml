@@ -37,7 +37,7 @@ jobs:
           cache: true
       - name: Check formatting of changed core files
         run: |
-          unformatted=$(gofmt -l main.go main_integration_test.go web/auth_test.go)
+          unformatted=$(gofmt -l main.go main_integration_test.go web/auth.go web/auth_test.go examples/hello/main.go)
           if [ -n "$unformatted" ]; then
             echo "$unformatted"
             exit 1
