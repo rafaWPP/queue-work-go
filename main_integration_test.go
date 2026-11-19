@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 	"testing"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -59,13 +60,19 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			id, _, _, found, err := claimNextTask(db, "integration")
-			if err != nil {
-				errs <- err
-				return
-			}
-			if found {
-				ids <- id
+			// SKIP LOCKED may return no row while other transactions hold
+			// locks, even though pending tasks remain. Retry in later rounds.
+			for attempt := 0; attempt < tasks*4; attempt++ {
+				id, _, _, found, err := claimNextTask(db, "integration")
+				if err != nil {
+					errs <- err
+					return
+				}
+				if found {
+					ids <- id
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
 			}
 		}()
 	}
