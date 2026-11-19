@@ -33,3 +33,32 @@ dashboard yet. It only exercises the storage engine.
 
 Do not point this CLI at a production database or run on shared network storage.
 No MariaDB schema or data is modified.
+
+## Local HTTP API (experimental)
+
+Run with a strong, random secret (minimum 32 characters):
+
+```bash
+export QUEUE_API_KEY='replace-with-a-random-secret-of-at-least-32-characters'
+./queue-standalone serve -db ./queue.db -listen 127.0.0.1:8088
+```
+
+Enqueue a task:
+
+```bash
+curl -X POST http://127.0.0.1:8088/v1/tasks \
+  -H "Authorization: Bearer $QUEUE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"queue":"default","name":"jobs/example","payload":"hello"}'
+```
+
+The endpoints are `POST /v1/tasks`, `POST /v1/claim`,
+`POST /v1/renew`, `POST /v1/complete`, and `POST /v1/fail`.
+`GET /healthz` reports HTTP process health, not full storage health.
+
+The API only listens on loopback and uses a bearer token. Do not expose it
+directly to the internet. Use a properly configured TLS reverse proxy and
+access control for remote deployments.
+
+**Important:** this is a queue storage API, not yet a background worker
+that executes plugins automatically. A client must claim and acknowledge jobs.
