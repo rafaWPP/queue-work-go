@@ -32,7 +32,9 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter,r *http.Request) {
   return
  }
  if r.Method!=http.MethodPost {http.Error(w,"method not allowed",http.StatusMethodNotAllowed);return}
- supplied:=strings.TrimPrefix(r.Header.Get("Authorization"),"Bearer ")
+ authorization:=r.Header.Get("Authorization")
+ if !strings.HasPrefix(authorization,"Bearer "){http.Error(w,"unauthorized",http.StatusUnauthorized);return}
+ supplied:=strings.TrimPrefix(authorization,"Bearer ")
  if len(supplied)!=len(a.key)||subtle.ConstantTimeCompare([]byte(supplied),[]byte(a.key))!=1 {
   http.Error(w,"unauthorized",http.StatusUnauthorized);return
  }
