@@ -1,6 +1,7 @@
 name: Standalone worker tests
 
 on:
+  workflow_dispatch:
   push:
     branches: [melhorias-seguranca-filas]
   pull_request:
