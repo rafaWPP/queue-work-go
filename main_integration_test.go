@@ -73,6 +73,10 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Simulate old pending jobs; claiming must refresh the lease timestamp.
+	if _, err := db.Exec("UPDATE queue_tasks SET updated_at = NOW() - INTERVAL 2 HOUR WHERE status = 'pending'"); err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
 	ids := make(chan int, tasks)
 	errs := make(chan error, tasks)
@@ -118,5 +122,12 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 	}
 	if pending != 0 {
 		t.Errorf("%d tasks remain pending", pending)
+	}
+	var staleProcessing int
+	if err := db.QueryRow("SELECT COUNT(*) FROM queue_tasks WHERE status = 'processing' AND updated_at < NOW() - INTERVAL 1 MINUTE").Scan(&staleProcessing); err != nil {
+		t.Fatal(err)
+	}
+	if staleProcessing != 0 {
+		t.Errorf("%d freshly claimed tasks still have stale timestamps", staleProcessing)
 	}
 }
