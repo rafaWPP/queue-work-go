@@ -356,7 +356,7 @@ func processNonConfiguredQueue(db *sql.DB, queueName string) {
 		logInfo(formatJobLog(taskName, "RUNNING"))
 		pluginPath, err := validatedPluginPath(taskName)
 		if err != nil {
-			_, updateErr := db.Exec("UPDATE queue_tasks SET status = 'failed', exception = ? WHERE id = ?", err.Error(), taskID)
+			_, updateErr := db.Exec("UPDATE queue_tasks SET status = 'failed', exception = ? WHERE id = ? AND status = 'processing'", err.Error(), taskID)
 			if updateErr != nil {
 				logError("Erro ao registrar plugin invalido para tarefa %d: %v", taskID, updateErr)
 			}
@@ -386,7 +386,7 @@ func processNonConfiguredQueue(db *sql.DB, queueName string) {
 		}
 		elapsed := time.Since(startTime)
 		if processingError != nil {
-			_, err = db.Exec("UPDATE queue_tasks SET status = 'failed', exception = ? WHERE id = ?", processingError.Error(), taskID)
+			_, err = db.Exec("UPDATE queue_tasks SET status = 'failed', exception = ? WHERE id = ? AND status = 'processing'", processingError.Error(), taskID)
 			if err != nil {
 				logError("Erro ao atualizar tarefa para 'failed' na fila %s (não configurada): %v", queueName, err)
 			}
