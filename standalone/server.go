@@ -3,6 +3,7 @@ package main
 import (
  "context"
  "crypto/subtle"
+ "database/sql"
  "encoding/json"
  "io"
  "errors"
@@ -60,7 +61,26 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter,r *http.Request) {
  ctx:=r.Context()
  var result any
  var err error
+ inspection,canInspect:=a.store.(interface {
+  ListTasks(context.Context,string,string,int)([]sqlite.TaskInfo,error)
+  GetTask(context.Context,string)(sqlite.TaskInfo,error)
+  ReplayFailed(context.Context,string)error
+ })
  switch r.URL.Path {
+ case "/v1/tasks/list":
+  if !canInspect{http.Error(w,"inspection unavailable",http.StatusNotImplemented);return}
+  var tasks []sqlite.TaskInfo
+  tasks,err=inspection.ListTasks(ctx,request.Queue,request.Name,100)
+  result=map[string]any{"tasks":tasks}
+ case "/v1/tasks/get":
+  if !canInspect{http.Error(w,"inspection unavailable",http.StatusNotImplemented);return}
+  if request.ID==""{http.Error(w,"id is required",400);return}
+  result,err=inspection.GetTask(ctx,request.ID)
+ case "/v1/tasks/replay":
+  if !canInspect{http.Error(w,"inspection unavailable",http.StatusNotImplemented);return}
+  if request.ID==""{http.Error(w,"id is required",400);return}
+  err=inspection.ReplayFailed(ctx,request.ID)
+  result=map[string]bool{"ok":err==nil}
  case "/v1/tasks":
   if request.Name=="" {http.Error(w,"name is required",400);return}
   var id string
@@ -84,6 +104,7 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter,r *http.Request) {
   http.NotFound(w,r);return
  }
  if err!=nil {
+  if errors.Is(err,sql.ErrNoRows){http.Error(w,"task not found or not failed",http.StatusNotFound);return}
   if errors.Is(err,queueengine.ErrNotOwner){http.Error(w,"lease not owned or expired",http.StatusConflict);return}
   log.Printf("queue API error: %v",err)
   http.Error(w,"internal queue error",http.StatusInternalServerError);return
