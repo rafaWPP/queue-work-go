@@ -76,7 +76,7 @@ Use variáveis de ambiente para `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_
 - [ ] Separar o motor genérico das integrações específicas de cada produto
 - [ ] Exemplos independentes de sistemas comerciais
 - [ ] Benchmarks reproduzíveis e releases versionadas
-- [ ] Definir uma licença open source com o mantenedor
+- [x] Adicionar licença MIT
 
 ## Contribuições
 
@@ -84,4 +84,4 @@ Issues, discussões técnicas e pull requests são bem-vindos. Veja `CONTRIBUTIN
 
 ## Licença
 
-**Ainda não definida.** Código público no GitHub não equivale automaticamente a código licenciado como open source. O mantenedor precisa escolher e adicionar uma licença antes de apresentar o projeto como formalmente open source.
+Licenciado sob a **MIT License**. Consulte o arquivo [LICENSE](LICENSE).
