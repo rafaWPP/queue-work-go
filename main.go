@@ -27,10 +27,9 @@ type Config struct {
 
 // loadEnvConfig carrega as variáveis do arquivo .env (para DB e outras).
 func loadEnvConfig() (string, string, string, string, string, error) {
-	err := godotenv.Load()
-	if err != nil {
-		logFatal("erro ao carregar arquivo .env")
-		return "", "", "", "", "", fmt.Errorf("erro ao carregar arquivo .env")
+	// O arquivo .env e opcional: containers e CI podem injetar variaveis diretamente.
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		return "", "", "", "", "", fmt.Errorf("erro ao carregar arquivo .env: %w", err)
 	}
 
 	DBUser := os.Getenv("DB_USER")
@@ -109,20 +108,17 @@ func runMigrations(db *sql.DB) error {
 		path := filepath.Join(migrationDir, migrationName)
 		sqlQuery, err := ioutil.ReadFile(path)
 		if err != nil {
-			logError("erro ao ler arquivo de migração %s: %v", migrationName, err)
-			continue
+			return fmt.Errorf("erro ao ler arquivo de migração %s: %w", migrationName, err)
 		}
 
 		_, err = db.Exec(string(sqlQuery))
 		if err != nil {
-			logError("erro ao executar migração %s: %v", migrationName, err)
-			continue
+			return fmt.Errorf("erro ao executar migração %s: %w", migrationName, err)
 		}
 
 		_, err = db.Exec("INSERT INTO migrations_go (migration) VALUES (?)", migrationName)
 		if err != nil {
-			logError("erro ao registrar migração %s: %v", migrationName, err)
-			continue
+			return fmt.Errorf("erro ao registrar migração %s: %w", migrationName, err)
 		}
 
 		logInfo("---%s", migrationName)
