@@ -1,0 +1,12 @@
+# Nunca publicar credenciais ou arquivos de ambiente
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs e binarios locais
+*.log
+*.so
+/webtech
+/webtech-queue
