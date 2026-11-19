@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -156,6 +157,23 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 	}
 	if found {
 		t.Fatal("second worker reserved an already claimed token task")
+	}
+
+	// Only the claiming worker may refresh its processing lease.
+	if err := heartbeatWithToken(context.Background(), db, tokenID, token); err != nil {
+		t.Fatalf("valid worker heartbeat failed: %v", err)
+	}
+	if err := heartbeatWithToken(context.Background(), db, tokenID, "wrong-token"); err == nil {
+		t.Fatal("heartbeat accepted another worker's token")
+	}
+	if err := heartbeatWithToken(context.Background(), db, tokenID, ""); err == nil {
+		t.Fatal("heartbeat accepted an empty token")
+	}
+	if _, err := db.Exec("UPDATE queue_tasks SET status = 'failed', processing_token = NULL WHERE id = ?", tokenID); err != nil {
+		t.Fatal(err)
+	}
+	if err := heartbeatWithToken(context.Background(), db, tokenID, token); err == nil {
+		t.Fatal("recovered task accepted stale worker heartbeat")
 	}
 
 	// Archiving without a history table must fail without deleting the task.
