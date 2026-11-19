@@ -3,8 +3,8 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
