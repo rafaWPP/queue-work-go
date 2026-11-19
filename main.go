@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -257,7 +258,7 @@ func validatedPluginPath(taskName string) (string, error) {
 // runWithHeartbeat keeps the processing timestamp fresh while Handle is running.
 // The heartbeat stops when Handle returns; it never changes a task's status.
 func runWithHeartbeat(db *sql.DB, taskID int, job common.Job) error {
-	stop := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -265,17 +266,21 @@ func runWithHeartbeat(db *sql.DB, taskID int, job common.Job) error {
 		defer ticker.Stop()
 		for {
 			select {
-			case <-stop:
+			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if _, err := db.Exec("UPDATE queue_tasks SET updated_at = NOW() WHERE id = ? AND status = 'processing'", taskID); err != nil {
+				// A temporary database outage must not block job completion forever.
+				queryCtx, queryCancel := context.WithTimeout(ctx, 10*time.Second)
+				_, err := db.ExecContext(queryCtx, "UPDATE queue_tasks SET updated_at = NOW() WHERE id = ? AND status = 'processing'", taskID)
+				queryCancel()
+				if err != nil && ctx.Err() == nil {
 					logError("Erro no heartbeat da tarefa %d: %v", taskID, err)
 				}
 			}
 		}
 	}()
 	err := job.Handle()
-	close(stop)
+	cancel()
 	<-done
 	return err
 }
