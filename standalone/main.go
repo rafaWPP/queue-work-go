@@ -16,7 +16,7 @@ import (
 )
 
 func run(ctx context.Context, args []string) error {
- if len(args)==0 {return errors.New("usage: queue-standalone [enqueue|claim|renew|complete|fail] [flags]")}
+ if len(args)==0 {return errors.New("usage: queue-standalone [serve|enqueue|claim|renew|complete|fail] [flags]")}
  command:=args[0]
  flags:=flag.NewFlagSet(command,flag.ContinueOnError)
  dbPath:=flags.String("db","queue.db","local SQLite file")
@@ -27,8 +27,15 @@ func run(ctx context.Context, args []string) error {
  token:=flags.String("token","","ownership token")
  reason:=flags.String("reason","","failure reason")
  lease:=flags.Duration("lease",30*time.Second,"lease duration")
+ addr:=flags.String("listen","127.0.0.1:8088","loopback HTTP address")
+ apiKey:=flags.String("api-key","","API key (prefer QUEUE_API_KEY environment variable)")
  if err:=flags.Parse(args[1:]);err!=nil{return err}
- switch command {case "enqueue","claim","renew","complete","fail": default:return fmt.Errorf("unknown command %q",command)}
+ switch command {case "serve","enqueue","claim","renew","complete","fail": default:return fmt.Errorf("unknown command %q",command)}
+ if command=="serve" {
+  key:=os.Getenv("QUEUE_API_KEY")
+  if key=="" {key=*apiKey}
+  return serve(ctx,*dbPath,*addr,key)
+ }
  store,err:=sqlite.Open(ctx,"sqlite3",*dbPath)
  if err!=nil{return err}
  defer store.Close()
