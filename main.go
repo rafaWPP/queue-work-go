@@ -211,7 +211,7 @@ func claimNextTask(db *sql.DB, queueName string) (int, string, string, bool, err
 	if err != nil {
 		return 0, "", "", false, err
 	}
-	result, err := tx.Exec("UPDATE queue_tasks SET status = 'processing' WHERE id = ? AND status = 'pending'", taskID)
+	result, err := tx.Exec("UPDATE queue_tasks SET status = 'processing', updated_at = NOW() WHERE id = ? AND status = 'pending'", taskID)
 	if err != nil {
 		return 0, "", "", false, err
 	}
@@ -330,7 +330,7 @@ func processQueue(db *sql.DB, queueName string) {
 		common.LogJobError(db, taskID, taskName, processingError)
 		logError(formatJobLog(taskName, fmt.Sprintf("%s FAIL", formatDuration(elapsed))))
 	} else {
-		_, err = db.Exec("UPDATE queue_tasks SET status = 'completed', exception = NULL WHERE id = ?", taskID)
+		_, err = db.Exec("UPDATE queue_tasks SET status = 'completed', exception = NULL, updated_at = NOW() WHERE id = ? AND status = 'processing'", taskID)
 		if err != nil {
 			logError("Erro ao atualizar tarefa para 'completed' na fila %s: %v", queueName, err)
 		}
