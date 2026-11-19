@@ -12,9 +12,13 @@ on:
       - 'go.sum'
       - '.github/workflows/standalone-worker-tests.yml'
 
+permissions:
+  contents: read
+
 jobs:
   standalone:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
