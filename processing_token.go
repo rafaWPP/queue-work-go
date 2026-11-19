@@ -51,8 +51,21 @@ func heartbeatWithToken(ctx context.Context, db *sql.DB, taskID int, token strin
 	if err != nil {
 		return err
 	}
-	if affected != 1 {
-		return fmt.Errorf("task %d is no longer owned by this worker", taskID)
+	if affected == 1 {
+		return nil
 	}
-	return nil
+	if affected != 0 {
+		return fmt.Errorf("unexpected heartbeat row count for task %d: %d", taskID, affected)
+	}
+	// MariaDB reports changed rows, not matched rows. When a heartbeat runs
+	// within the same timestamp second, updated_at may remain unchanged.
+	// Verify ownership explicitly rather than treating that as a lost lease.
+	var exists int
+	err = db.QueryRowContext(queryCtx,
+		"SELECT 1 FROM queue_tasks WHERE id = ? AND status = 'processing' AND processing_token = ?",
+		taskID, token).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("%w: task %d", ErrNotOwner, taskID)
+	}
+	return err
 }
