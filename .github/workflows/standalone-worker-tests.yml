@@ -1,0 +1,27 @@
+name: Standalone worker tests
+
+on:
+  push:
+    branches: [melhorias-seguranca-filas]
+  pull_request:
+    paths:
+      - 'standalone/**'
+      - 'internal/queueengine/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/standalone-worker-tests.yml'
+
+jobs:
+  standalone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: standalone/go.mod
+          cache-dependency-path: |
+            go.sum
+            standalone/go.sum
+      - name: Run standalone tests
+        working-directory: standalone
+        run: go test -race -count=1 ./...
