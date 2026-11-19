@@ -193,29 +193,53 @@ func formatJobLog(job, suffix string) string {
 	return fmt.Sprintf("%s %s %s", job, dots, suffix)
 }
 
-// processQueue processa uma tarefa de uma fila configurada.
-func processQueue(db *sql.DB, queueName string) {
-	rows, err := db.Query("SELECT id, task_name, data FROM queue_tasks WHERE status = 'pending' AND queue_name = ? AND (available_at IS NULL OR available_at <= NOW()) ORDER BY available_at ASC, id ASC LIMIT 1", queueName)
+// claimNextTask reserva uma tarefa de forma atomica para evitar que workers
+// concorrentes executem o mesmo job. Requer MySQL 8+ (SKIP LOCKED).
+func claimNextTask(db *sql.DB, queueName string) (int, string, string, bool, error) {
+	tx, err := db.Begin()
 	if err != nil {
-		logError("Erro ao buscar tarefas da fila %s: %v", queueName, err)
-		return
+		return 0, "", "", false, err
 	}
-	defer rows.Close()
-
-	if !rows.Next() {
-		return
-	}
+	defer tx.Rollback()
 
 	var taskID int
 	var taskName, data string
-	if err := rows.Scan(&taskID, &taskName, &data); err != nil {
-		logError("Erro ao escanear tarefa na fila %s: %v", queueName, err)
+	err = tx.QueryRow(`SELECT id, task_name, data FROM queue_tasks
+		WHERE status = 'pending' AND queue_name = ?
+		AND (available_at IS NULL OR available_at <= NOW())
+		ORDER BY available_at ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED`, queueName).
+		Scan(&taskID, &taskName, &data)
+	if err == sql.ErrNoRows {
+		return 0, "", "", false, nil
+	}
+	if err != nil {
+		return 0, "", "", false, err
+	}
+	result, err := tx.Exec("UPDATE queue_tasks SET status = 'processing' WHERE id = ? AND status = 'pending'", taskID)
+	if err != nil {
+		return 0, "", "", false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, "", "", false, err
+	}
+	if n != 1 {
+		return 0, "", "", false, fmt.Errorf("reserva inconsistente da tarefa %d", taskID)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, "", "", false, err
+	}
+	return taskID, taskName, data, true, nil
+}
+
+// processQueue processa uma tarefa de uma fila configurada.
+func processQueue(db *sql.DB, queueName string) {
+	taskID, taskName, data, found, err := claimNextTask(db, queueName)
+	if err != nil {
+		logError("Erro ao reservar tarefa da fila %s: %v", queueName, err)
 		return
 	}
-
-	_, err = db.Exec("UPDATE queue_tasks SET status = 'processing' WHERE id = ?", taskID)
-	if err != nil {
-		logError("Erro ao atualizar tarefa para 'processing' na fila %s: %v", queueName, err)
+	if !found {
 		return
 	}
 
@@ -265,31 +289,17 @@ func processQueue(db *sql.DB, queueName string) {
 // processNonConfiguredQueue faz a mesma lógica de processQueue para filas não configuradas.
 func processNonConfiguredQueue(db *sql.DB, queueName string) {
 	for {
-		rows, err := db.Query("SELECT id, task_name, data FROM queue_tasks WHERE status = 'pending' AND queue_name = ? AND (available_at IS NULL OR available_at <= NOW()) ORDER BY available_at ASC, id ASC LIMIT 1", queueName)
+		taskID, taskName, data, found, err := claimNextTask(db, queueName)
 		if err != nil {
-			logError("Erro ao buscar tarefa na fila %s (não configurada): %v", queueName, err)
+			logError("Erro ao reservar tarefa da fila %s: %v", queueName, err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		if !rows.Next() {
-			rows.Close()
+		if !found {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		var taskID int
-		var taskName, data string
-		if err := rows.Scan(&taskID, &taskName, &data); err != nil {
-			logError("Erro ao escanear tarefa na fila %s (não configurada): %v", queueName, err)
-			rows.Close()
-			continue
-		}
-		rows.Close()
-		_, err = db.Exec("UPDATE queue_tasks SET status = 'processing' WHERE id = ?", taskID)
-		if err != nil {
-			db.Exec("UPDATE queue_tasks SET exception = ? WHERE id = ?", fmt.Sprintf("Erro ao atualizar para processing: %v", err), taskID)
-			logError("Erro ao atualizar tarefa para 'processing' na fila %s (não configurada): %v", queueName, err)
-			continue
-		}
+
 		startTime := time.Now()
 		logInfo(formatJobLog(taskName, "RUNNING"))
 		pluginPath := fmt.Sprintf("%s.so", taskName)
