@@ -105,3 +105,27 @@ This is **at-least-once**, not exactly-once, processing.
 A task that fails is returned to pending with a future availability timestamp.
 Once the maximum number of claims is reached, it is marked failed. Retries
 preserve ownership fencing; expired workers cannot reschedule a task.
+
+## Task inspection and manual replay
+
+Authenticated POST endpoints (same bearer key as other operations):
+
+- `/v1/tasks/list`: `{"queue":"default","name":"failed"}` lists up to
+  100 recent tasks. Here `name` is the **status filter**, not the task name;
+  omit it to include all statuses.
+- `/v1/tasks/get`: `{"id":"TASK_ID"}` returns task status, attempts,
+  last error and lease expiry, but not the payload or ownership token.
+- `/v1/tasks/replay`: `{"id":"TASK_ID"}` moves a **failed** task back
+  to pending. Replay is explicit and does not clear the attempt history.
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8088/v1/tasks/list \
+  -H "Authorization: Bearer $QUEUE_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"queue":"default","name":"failed"}'
+```
+
+Replay should only be used after resolving the underlying failure. The
+API does not provide pagination or an administrative dashboard yet.
