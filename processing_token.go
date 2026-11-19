@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"time"
 )
 
 // newProcessingToken creates a cryptographically random identifier for a single
@@ -28,4 +31,28 @@ func newProcessingToken() (string, error) {
 	chars[23] = '-'
 	hex.Encode(chars[24:36], bytes[10:16])
 	return string(chars[:]), nil
+}
+
+// heartbeatWithToken refreshes the lease only while this execution owns the task.
+// A zero-row update means the task was recovered, reassigned, or deleted.
+func heartbeatWithToken(ctx context.Context, db *sql.DB, taskID int, token string) error {
+	if token == "" {
+		return fmt.Errorf("missing processing token for task %d", taskID)
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	result, err := db.ExecContext(queryCtx,
+		"UPDATE queue_tasks SET updated_at = NOW() WHERE id = ? AND status = 'processing' AND processing_token = ?",
+		taskID, token)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("task %d is no longer owned by this worker", taskID)
+	}
+	return nil
 }
