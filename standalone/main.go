@@ -7,6 +7,7 @@ import (
  "errors"
  "flag"
  "fmt"
+ "log"
  "os"
  "os/signal"
  "syscall"
