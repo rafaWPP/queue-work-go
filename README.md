@@ -56,7 +56,7 @@ O build dos plugins depende da plataforma e de uma versão compatível do compil
 
 Use variáveis de ambiente para `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `PORT` e `AUTH`. Nunca faça commit de arquivos `.env` reais. Consulte `.env.example`.
 
-**Aviso de segurança:** a interface web atual ainda aceita `?auth=` nas URLs, o que pode expor a chave em históricos e logs. Não exponha o painel diretamente à internet. Há também uma rotina de recuperação de jobs que precisa de testes com tarefas de longa duração. Veja `SECURITY.md`.
+**Aviso de segurança:** a branch de melhorias agora utiliza login via POST e cookie de sessão assinado, em vez de `?auth=`. Configure `AUTH` com um segredo forte e use HTTPS com proxy reverso confiável; a migração ainda está em validação. Há também uma rotina de recuperação de jobs que precisa de testes com tarefas de longa duração. Veja `SECURITY.md`.
 
 ## Estrutura
 
@@ -72,7 +72,7 @@ Use variáveis de ambiente para `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_
 
 - [x] Testes unitários iniciais da autenticação e workflow de CI (execução aprovada no commit `f2ff993`)
 - [x] Teste inicial de reserva concorrente com MariaDB 10.11 (não cobre falhas externas)
-- [ ] Sessões seguras no painel, sem token em URL
+- [x] Login com sessão assinada, sem token em URL (validação de CI pendente)
 - [ ] Política documentada de retry, heartbeat e idempotência
 - [ ] Separar o motor genérico das integrações específicas de cada produto
 - [x] Exemplo inicial de plugin independente de sistemas comerciais
@@ -94,5 +94,5 @@ A branch de melhorias inclui o workflow [Go CI](.github/workflows/go-ci.yml), co
 ## Limites de segurança e confiabilidade
 
 - A reserva transacional de tarefas reduz corridas entre workers, mas não garante execução exatamente uma vez após falhas externas.
-- O painel ainda usa segredo na URL por compatibilidade. Não o exponha publicamente.
+- O painel da branch de melhorias exige cookie de sessão e login POST. Use HTTPS, configure proxy confiável e evite expor diretamente à internet antes de revisão independente.
 - Jobs com efeitos externos devem ser idempotentes e precisam de testes isolados.
