@@ -29,6 +29,7 @@ jobs:
           --health-retries=10
     env:
       QUEUE_TEST_DSN: queue_test:queue_test@tcp(127.0.0.1:3306)/queue_test?parseTime=true
+      QUEUE_TEST_ALLOW_DESTRUCTIVE: 'yes'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
