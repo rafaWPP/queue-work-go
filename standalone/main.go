@@ -7,6 +7,7 @@ import (
  "errors"
  "flag"
  "fmt"
+ "log"
  "os"
  "time"
 
@@ -16,7 +17,7 @@ import (
 )
 
 func run(ctx context.Context, args []string) error {
- if len(args)==0 {return errors.New("usage: queue-standalone [serve|enqueue|claim|renew|complete|fail] [flags]")}
+ if len(args)==0 {return errors.New("usage: queue-standalone [serve|work|enqueue|claim|renew|complete|fail] [flags]")}
  command:=args[0]
  flags:=flag.NewFlagSet(command,flag.ContinueOnError)
  dbPath:=flags.String("db","queue.db","local SQLite file")
@@ -29,8 +30,9 @@ func run(ctx context.Context, args []string) error {
  lease:=flags.Duration("lease",30*time.Second,"lease duration")
  addr:=flags.String("listen","127.0.0.1:8088","loopback HTTP address")
  apiKey:=flags.String("api-key","","API key (prefer QUEUE_API_KEY environment variable)")
+ poll:=flags.Duration("poll",500*time.Millisecond,"worker polling interval")
  if err:=flags.Parse(args[1:]);err!=nil{return err}
- switch command {case "serve","enqueue","claim","renew","complete","fail": default:return fmt.Errorf("unknown command %q",command)}
+ switch command {case "serve","work","enqueue","claim","renew","complete","fail": default:return fmt.Errorf("unknown command %q",command)}
  if command=="serve" {
   key:=os.Getenv("QUEUE_API_KEY")
   if key=="" {key=*apiKey}
@@ -39,6 +41,13 @@ func run(ctx context.Context, args []string) error {
  store,err:=sqlite.Open(ctx,"sqlite3",*dbPath)
  if err!=nil{return err}
  defer store.Close()
+ if command=="work" {
+  handlers:=map[string]Handler{
+   "builtin/noop":func(context.Context,[]byte)error{return nil},
+   "builtin/log":func(_ context.Context,payload []byte)error{log.Printf("processed log task (%d bytes)",len(payload));return nil},
+  }
+  return (&worker{store:store,queue:*queue,handlers:handlers,lease:*lease,poll:*poll,logger:log.Default()}).run(ctx)
+ }
  switch command {
  case "enqueue":
   if *name=="" {return errors.New("-name is required")}
