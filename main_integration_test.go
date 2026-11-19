@@ -201,4 +201,29 @@ func TestClaimNextTaskMariaDB(t *testing.T) {
 	if historyCount != 1 {
 		t.Fatalf("expected one history entry, got %d", historyCount)
 	}
+	// A live heartbeat must protect long-running jobs from stale recovery.
+	var liveID int
+	if err := db.QueryRow("SELECT id FROM queue_tasks WHERE status = 'processing' ORDER BY id LIMIT 1").Scan(&liveID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE queue_tasks SET updated_at = NOW() - INTERVAL 2 HOUR WHERE status = 'processing'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE queue_tasks SET updated_at = NOW() WHERE id = ? AND status = 'processing'", liveID); err != nil {
+		t.Fatal(err)
+	}
+	recoverStuckProcessingTasks(db, 30*time.Minute)
+	if err := db.QueryRow("SELECT status FROM queue_tasks WHERE id = ?", liveID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "processing" {
+		t.Fatalf("live task incorrectly recovered as %q", status)
+	}
+	var recovered int
+	if err := db.QueryRow("SELECT COUNT(*) FROM queue_tasks WHERE status = 'failed'").Scan(&recovered); err != nil {
+		t.Fatal(err)
+	}
+	if recovered < 2 {
+		t.Fatalf("expected stale processing tasks to be recovered; found %d failed tasks", recovered)
+	}
 }
