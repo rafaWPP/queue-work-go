@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"time"
+
+	"go-queue/internal/queueengine"
 )
 
 // newProcessingToken creates a cryptographically random identifier for a single
@@ -65,7 +67,7 @@ func heartbeatWithToken(ctx context.Context, db *sql.DB, taskID int, token strin
 		"SELECT 1 FROM queue_tasks WHERE id = ? AND status = 'processing' AND processing_token = ?",
 		taskID, token).Scan(&exists)
 	if err == sql.ErrNoRows {
-		return fmt.Errorf("%w: task %d", ErrNotOwner, taskID)
+		return fmt.Errorf("%w: task %d", queueengine.ErrNotOwner, taskID)
 	}
 	return err
 }
