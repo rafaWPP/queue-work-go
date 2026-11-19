@@ -335,9 +335,19 @@ func processQueue(db *sql.DB, queueName string) {
 		common.LogJobError(db, taskID, taskName, processingError)
 		logError(formatJobLog(taskName, fmt.Sprintf("%s FAIL", formatDuration(elapsed))))
 	} else {
-		_, err = db.Exec("UPDATE queue_tasks SET status = 'completed', exception = NULL, updated_at = NOW() WHERE id = ? AND status = 'processing'", taskID)
-		if err != nil {
-			logError("Erro ao atualizar tarefa para 'completed' na fila %s: %v", queueName, err)
+		result, updateErr := db.Exec("UPDATE queue_tasks SET status = 'completed', exception = NULL, updated_at = NOW() WHERE id = ? AND status = 'processing'", taskID)
+		if updateErr != nil {
+			logError("Erro ao atualizar tarefa para 'completed' na fila %s: %v", queueName, updateErr)
+			return
+		}
+		affected, updateErr := result.RowsAffected()
+		if updateErr != nil {
+			logError("Erro ao confirmar conclusao da tarefa %d: %v", taskID, updateErr)
+			return
+		}
+		if affected != 1 {
+			logError("Tarefa %d nao foi concluida: estado alterado por outro processo", taskID)
+			return
 		}
 		logInfo(formatJobLog(taskName, fmt.Sprintf("%s DONE", formatDuration(elapsed))))
 	}
