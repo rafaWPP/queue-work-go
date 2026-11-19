@@ -6,13 +6,13 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"net/http"
 	"net"
-	"sync"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,46 +24,55 @@ const loginWindow = 15 * time.Minute
 const loginLimit = 5
 
 type loginFailure struct {
- count int
- expires time.Time
+	count   int
+	expires time.Time
 }
+
 var loginGuard = struct {
- sync.Mutex
- failures map[string]loginFailure
+	sync.Mutex
+	failures map[string]loginFailure
 }{failures: make(map[string]loginFailure)}
 
 func loginPeer(r *http.Request) string {
- host, _, err := net.SplitHostPort(r.RemoteAddr)
- if err != nil { return r.RemoteAddr }
- return host
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 func loginBlocked(peer string, now time.Time) bool {
- loginGuard.Lock()
- defer loginGuard.Unlock()
- entry := loginGuard.failures[peer]
- return now.Before(entry.expires) && entry.count >= loginLimit
+	loginGuard.Lock()
+	defer loginGuard.Unlock()
+	entry := loginGuard.failures[peer]
+	return now.Before(entry.expires) && entry.count >= loginLimit
 }
 
 func loginFailed(peer string, now time.Time) {
- loginGuard.Lock()
- defer loginGuard.Unlock()
- if len(loginGuard.failures) >= 10000 {
-  for key, entry := range loginGuard.failures {
-   if !now.Before(entry.expires) { delete(loginGuard.failures, key) }
-  }
-  if len(loginGuard.failures) >= 10000 { return }
- }
- entry := loginGuard.failures[peer]
- if !now.Before(entry.expires) { entry = loginFailure{expires: now.Add(loginWindow)} }
- entry.count++
- loginGuard.failures[peer] = entry
+	loginGuard.Lock()
+	defer loginGuard.Unlock()
+	if len(loginGuard.failures) >= 10000 {
+		for key, entry := range loginGuard.failures {
+			if !now.Before(entry.expires) {
+				delete(loginGuard.failures, key)
+			}
+		}
+		if len(loginGuard.failures) >= 10000 {
+			return
+		}
+	}
+	entry := loginGuard.failures[peer]
+	if !now.Before(entry.expires) {
+		entry = loginFailure{expires: now.Add(loginWindow)}
+	}
+	entry.count++
+	loginGuard.failures[peer] = entry
 }
 
 func loginSucceeded(peer string) {
- loginGuard.Lock()
- delete(loginGuard.failures, peer)
- loginGuard.Unlock()
+	loginGuard.Lock()
+	delete(loginGuard.failures, peer)
+	loginGuard.Unlock()
 }
 
 // Sessions are signed using AUTH. Changing AUTH invalidates all sessions.
