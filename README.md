@@ -42,12 +42,16 @@ VALUES ('default', 'jobs/example', '{"message":"hello"}', 'pending');
 
 O caminho acima é ilustrativo. Para um plugin funcional e independente de integrações comerciais, consulte [examples/hello](examples/hello/README.md).
 
+## Início rápido sem instalar serviços
+
+Para testar com MariaDB descartável e um plugin independente, siga o [guia de início rápido](docs/QUICKSTART.md). O script `scripts/build-local.sh` compila o worker e o plugin de exemplo **sem sudo, systemd ou alterações no servidor**.
+
 ## Desenvolvimento local
 
 ```bash
 go mod download
-go test ./...
-go build ./...
+go test . ./common ./web ./cmd/webtech
+go build . ./common ./web ./cmd/webtech
 ```
 
 O build dos plugins depende da plataforma e de uma versão compatível do compilador Go. Consulte `build.sh` e `cmd/webtech/main.go` antes de usar o script de instalação, pois ele interage com o systemd.
