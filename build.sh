@@ -37,7 +37,7 @@ done
 
 # Compilar o executável principal
 echo -e "${GREEN}Compilando o executável principal...${NC}"
-go build -o webtech-queue .
+go build -buildvcs=false -o webtech-queue .
 if [ $? -ne 0 ]; then
     echo -e "${RED}Erro na compilação do main${NC}"
     exit 1

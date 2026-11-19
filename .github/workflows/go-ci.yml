@@ -1,0 +1,58 @@
+name: Go CI
+
+on:
+  push:
+    branches: [main, versao-completa, melhorias-seguranca-filas]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: test-root-only
+          MARIADB_DATABASE: queue_test
+          MARIADB_USER: queue_test
+          MARIADB_PASSWORD: queue_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      QUEUE_TEST_DSN: queue_test:queue_test@tcp(127.0.0.1:3306)/queue_test?parseTime=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting of changed core files
+        run: |
+          unformatted=$(gofmt -l main.go main_integration_test.go web/auth.go web/auth_test.go examples/hello/main.go)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Unit and MariaDB integration tests
+        run: go test -v . ./common ./web ./cmd/webtech
+      - name: Compile core packages
+        run: go build . ./common ./web ./cmd/webtech
+      - name: Validate safe local build script
+        run: bash -n scripts/build-local.sh
+      - name: Build standalone example plugin
+        run: go build -buildmode=plugin -o /tmp/queue-example.so ./examples/hello
+      - name: Build each plugin separately
+        run: |
+          for file in jobs/*.go jobs/mk/*.go; do
+            echo "Building $file"
+            go build -buildmode=plugin -o /tmp/queue-plugin.so "$file"
+          done

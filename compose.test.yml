@@ -1,0 +1,19 @@
+# Disposable local MariaDB for integration testing only.
+# Do not use this configuration with production data.
+services:
+  mariadb:
+    image: mariadb:10.11
+    environment:
+      MARIADB_ROOT_PASSWORD: local-test-root
+      MARIADB_DATABASE: queue_test
+      MARIADB_USER: queue_test
+      MARIADB_PASSWORD: queue_test
+    ports:
+      - "127.0.0.1:3307:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    tmpfs:
+      - /var/lib/mysql

@@ -1,0 +1,20 @@
+
+# Credenciais e configurações privadas
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs
+*.log
+
+# Binários compilados
+/main
+/webtech
+/webtech-queue
+*.so
+
+# Arquivos temporários
+*.tmp
+*.bak

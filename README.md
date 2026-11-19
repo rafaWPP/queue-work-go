@@ -1,4 +1,102 @@
-Comando	Descrição
-webtech create:job NomeDoJob	Cria um novo job (jobs/nomedojob.go) com estrutura padrão
-webtech build	                Compila os plugins, compila o sistema e executa ./main
-webtech clean	                Remove todos os arquivos compilados (.so, main, webtech)
+# Queue Work Go
+
+Um processador de tarefas em segundo plano escrito em Go, com filas persistentes em banco de dados, plugins compilados, agendamento e painel de acompanhamento.
+
+> **Status:** projeto em desenvolvimento. A branch `melhorias-seguranca-filas` contém mudanças experimentais que ainda precisam de testes de integração. Não implante esta branch diretamente em produção.
+
+## Para que serve
+
+O projeto separa tarefas demoradas do fluxo principal de uma aplicação. Exemplos de tarefas incluem notificações, integrações HTTP e processamento assíncrono. O mecanismo central armazena tarefas em `queue_tasks`, seleciona jobs elegíveis e carrega implementações da interface `common.Job` como plugins Go.
+
+## Recursos existentes
+
+- Filas nomeadas e persistidas em banco de dados
+- Jobs implementados como plugins Go (`.so`)
+- Agendamento por `available_at`
+- Estados `pending`, `processing`, `completed` e `failed`
+- Painel web com tarefas, falhas e histórico
+- Migrações SQL e scripts de build/systemd
+- Exemplos de integrações específicas em `jobs/`
+
+## Requisitos
+
+- Go conforme `go.mod`
+- Banco MySQL/MariaDB compatível com as migrações
+- Linux para o fluxo atual de plugins e systemd
+- **Para a branch experimental:** suporte a `SELECT ... FOR UPDATE SKIP LOCKED`. Verifique a versão exata do seu MariaDB antes de usar; não há matriz de compatibilidade testada.
+
+## Visão geral do fluxo
+
+1. Uma aplicação insere uma tarefa na tabela `queue_tasks`.
+2. Um worker reserva a tarefa elegível para execução.
+3. O worker carrega o plugin correspondente ao `task_name`.
+4. O plugin implementa `Handle() error`.
+5. O resultado é registrado como sucesso ou falha.
+
+Exemplo ilustrativo de inserção (requer schema já migrado e plugin compilado):
+
+```sql
+INSERT INTO queue_tasks (queue_name, task_name, data, status)
+VALUES ('default', 'jobs/example', '{"message":"hello"}', 'pending');
+```
+
+O caminho acima é ilustrativo. Para um plugin funcional e independente de integrações comerciais, consulte [examples/hello](examples/hello/README.md).
+
+## Início rápido sem instalar serviços
+
+Para testar com MariaDB descartável e um plugin independente, siga o [guia de início rápido](docs/QUICKSTART.md). O script `scripts/build-local.sh` compila o worker e o plugin de exemplo **sem sudo, systemd ou alterações no servidor**.
+
+## Desenvolvimento local
+
+```bash
+go mod download
+go test . ./common ./web ./cmd/webtech
+go build . ./common ./web ./cmd/webtech
+```
+
+O build dos plugins depende da plataforma e de uma versão compatível do compilador Go. Consulte `build.sh` e `cmd/webtech/main.go` antes de usar o script de instalação, pois ele interage com o systemd.
+
+## Configuração
+
+Use variáveis de ambiente para `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `PORT` e `AUTH`. Nunca faça commit de arquivos `.env` reais. Consulte `.env.example`.
+
+**Aviso de segurança:** a branch de melhorias agora utiliza login via POST e cookie de sessão assinado, em vez de `?auth=`. Configure `AUTH` com um segredo forte e use HTTPS com proxy reverso confiável; a migração ainda está em validação. Há também uma rotina de recuperação de jobs que precisa de testes com tarefas de longa duração. Veja `SECURITY.md`.
+
+## Estrutura
+
+- `main.go`: ciclo de vida do worker, reserva de tarefas e migrações
+- `common/`: interface e utilitários de jobs
+- `jobs/`: integrações específicas e exemplos de plugins
+- `migrations/`: estrutura do banco de dados
+- `web/`: painel de acompanhamento
+- `cmd/webtech/`: comandos de desenvolvimento
+- `build.sh`: build e instalação do serviço
+
+## Estado do projeto e roadmap
+
+- [x] Testes unitários iniciais da autenticação e workflow de CI (execução aprovada no commit `f2ff993`)
+- [x] Teste inicial de reserva concorrente com MariaDB 10.11 (não cobre falhas externas)
+- [x] Login com sessão assinada, sem token em URL (validação de CI pendente)
+- [ ] Política documentada de retry, heartbeat e idempotência
+- [ ] Separar o motor genérico das integrações específicas de cada produto
+- [x] Exemplo inicial de plugin independente de sistemas comerciais
+- [ ] Benchmarks reproduzíveis e releases versionadas
+- [x] Adicionar licença MIT
+
+## Contribuições
+
+Issues, discussões técnicas e pull requests são bem-vindos. Veja `CONTRIBUTING.md` e `SECURITY.md`.
+
+## Licença
+
+Licenciado sob a **MIT License**. Consulte o arquivo [LICENSE](LICENSE).
+
+## Integração contínua
+
+A branch de melhorias inclui o workflow [Go CI](.github/workflows/go-ci.yml), com testes e compilação de pacotes. **A existência do workflow não confirma que ele já passou:** consulte a aba Actions do GitHub para conferir a execução. O workflow passou no commit `f2ff993`; mudanças posteriores precisam de nova validação. Ainda faltam testes de recuperação, falhas externas e uma matriz de compatibilidade.
+
+## Limites de segurança e confiabilidade
+
+- A reserva transacional de tarefas reduz corridas entre workers, mas não garante execução exatamente uma vez após falhas externas.
+- O painel da branch de melhorias exige cookie de sessão e login POST. Use HTTPS, configure proxy confiável e evite expor diretamente à internet antes de revisão independente.
+- Jobs com efeitos externos devem ser idempotentes e precisam de testes isolados.

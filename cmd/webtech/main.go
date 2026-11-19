@@ -128,6 +128,26 @@ func buildAndRun() {
 		}
 	}
 
+	// Compila plugins em jobs/mk (se existir)
+	mkDir := filepath.Join(jobsDir, "mk")
+	if entries, err := os.ReadDir(mkDir); err == nil {
+		fmt.Println("Compilando plugins mk...")
+		for _, file := range entries {
+			if strings.HasSuffix(file.Name(), ".go") {
+				jobName := strings.TrimSuffix(file.Name(), ".go")
+				soFile := filepath.Join(mkDir, jobName+".so")
+				fmt.Println("Compilando:", file.Name(), "->", soFile)
+				cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", soFile, filepath.Join(mkDir, file.Name()))
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				if err := cmd.Run(); err != nil {
+					fmt.Println("Erro ao compilar plugin mk:", file.Name(), "-", err)
+					os.Exit(1)
+				}
+			}
+		}
+	}
+
 	fmt.Println("Compilando o sistema principal (main)...")
 	cmd := exec.Command("go", "build", "-o", "main")
 	cmd.Stdout = os.Stdout

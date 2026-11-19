@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +30,17 @@ type ProcessCampaignJob struct {
 	MediaURL       string `json:"media_url"`        // URL da mídia (se houver) recebida do Laravel
 	Phone          string `json:"phone"`            // Telefone (informado no payload)
 	CampaignSendID int    `json:"campaign_send_id"` // ID do registro de envio (campaign_sends) para atualizar o status
+	SkipDelay      bool   `json:"skip_delay"`       // Se true, não aplica delay local (available_at já agenda)
+	MetaTemplate    bool              `json:"meta_template"`
+	TemplateName       string            `json:"template_name"`
+	TemplateLanguage   string            `json:"template_language"`
+	TemplateParameters []string          `json:"template_parameters"`
+	TemplateButtonParameters map[string]string `json:"template_button_parameters"`
+	TemplateButtonTypes map[string]string `json:"template_button_types"`
+	HeaderFormat       string            `json:"header_format"`
+	HeaderMediaURL     string            `json:"header_media_url"`
+	AutoReplyMessage   string            `json:"auto_reply_message"`
+	AutoReplyMediaURL  string            `json:"auto_reply_media_url"`
 }
 
 // New cria o job a partir do JSON recebido.
@@ -43,7 +56,6 @@ func New(data []byte) common.Job {
 // Handle executa o processamento do job.
 // Cada job envia uma única mensagem para o telefone especificado e atualiza o status do envio.
 func (j *ProcessCampaignJob) Handle() error {
-	updateCampaignSendStatus(j.CampaignSendID, "enviando")
 	// 1) Carrega informações da campanha (status, messages_sent, company_id)
 	campStatus, messagesSent, companyID, err := getCampaignByID(j.CampaignID)
 	if err != nil {
@@ -53,6 +65,18 @@ func (j *ProcessCampaignJob) Handle() error {
 	if campStatus == "cancelado" || campStatus == "Enviado" {
 		fmt.Printf("Campanha %d está em status %s; nada a fazer.\n", j.CampaignID, campStatus)
 		return nil
+	}
+	if campStatus == "pause" {
+		fmt.Printf("Campanha %d está pausada; ignorando envio.\n", j.CampaignID)
+		if j.CampaignSendID > 0 {
+			updateCampaignSendStatus(j.CampaignSendID, "pendente")
+		}
+		return nil
+	}
+
+	// Atualiza o status do registro para "enviando"
+	if j.CampaignSendID > 0 {
+		updateCampaignSendStatus(j.CampaignSendID, "enviando")
 	}
 
 	// Se a campanha não estiver "enviando" ou "pendente", atualiza o status para "enviando"
@@ -67,16 +91,21 @@ func (j *ProcessCampaignJob) Handle() error {
 		tempoMin, tempoMax, limite, aguardar = 10, 15, 100, 30
 	}
 
-	// 3) Aplica delay conforme as configurações
-	if messagesSent >= limite {
-		fmt.Printf("Limite de %d mensagens atingido; aguardando %d segundos...\n", limite, aguardar)
-		time.Sleep(time.Duration(aguardar) * time.Second)
+	// 3) Aplica delay conforme as configurações (se não estiver pré-agendado)
+	if !j.SkipDelay {
+		if messagesSent >= limite {
+			fmt.Printf("Limite de %d mensagens atingido; aguardando %d segundos...\n", limite, aguardar)
+			time.Sleep(time.Duration(aguardar) * time.Second)
+			resetMessagesSent(j.CampaignID)
+			messagesSent = 0
+		} else {
+			delaySec := rand.Intn(tempoMax-tempoMin+1) + tempoMin
+			fmt.Printf("Aguardando %d segundos antes de enviar...\n", delaySec)
+			time.Sleep(time.Duration(delaySec) * time.Second)
+		}
+	} else if limite > 0 && messagesSent >= limite {
 		resetMessagesSent(j.CampaignID)
 		messagesSent = 0
-	} else {
-		delaySec := rand.Intn(tempoMax-tempoMin+1) + tempoMin
-		fmt.Printf("Aguardando %d segundos antes de enviar...\n", delaySec)
-		time.Sleep(time.Duration(delaySec) * time.Second)
 	}
 
 	// 4) Verifica se o telefone foi informado no payload
@@ -86,7 +115,28 @@ func (j *ProcessCampaignJob) Handle() error {
 		if j.CampaignSendID > 0 {
 			updateCampaignSendStatus(j.CampaignSendID, "Sem WhatsApp")
 		}
+		finalizeCampaignIfDone(j.CampaignID)
 		return nil
+	}
+
+	if j.MetaTemplate && j.TemplateName != "" {
+		sent, err := sendMetaTemplate(j, companyID)
+		if err != nil {
+			if j.CampaignSendID > 0 {
+				updateCampaignSendStatus(j.CampaignSendID, "erro")
+			}
+			fmt.Printf("Erro ao enviar template Meta: %v\n", err)
+			finalizeCampaignIfDone(j.CampaignID)
+			return nil
+		}
+		if sent {
+			if j.CampaignSendID > 0 {
+				updateCampaignSendStatus(j.CampaignSendID, "Enviado")
+			}
+			incrementMessagesSent(j.CampaignID)
+			finalizeCampaignIfDone(j.CampaignID)
+			return nil
+		}
 	}
 
 	// 5) Envia a mensagem via API
@@ -101,6 +151,7 @@ func (j *ProcessCampaignJob) Handle() error {
 			}
 		}
 		fmt.Printf("Erro ao enviar para %s: %v\n", j.Phone, errSend)
+		finalizeCampaignIfDone(j.CampaignID)
 		return nil
 	}
 
@@ -229,6 +280,280 @@ func getMarketingConfig(companyID int) (int, int, int, int, error) {
 	return tempoMin, tempoMax, limite, aguardar, nil
 }
 
+type MetaConfig struct {
+	AccessToken   string
+	PhoneNumberID string
+}
+
+func getMetaConfig(companyID int) (*MetaConfig, error) {
+	dsn, err := getDSN()
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("Erro ao conectar ao banco: %v", err)
+	}
+	defer db.Close()
+
+	var accessToken, phoneNumberID string
+	query := "SELECT access_token, phone_number_id FROM meta_waba_connections WHERE company_id = ? LIMIT 1"
+	err = db.QueryRow(query, companyID).Scan(&accessToken, &phoneNumberID)
+	if err != nil {
+		return nil, err
+	}
+	if accessToken == "" || phoneNumberID == "" {
+		return nil, fmt.Errorf("Dados de Meta incompletos")
+	}
+	return &MetaConfig{
+		AccessToken:   accessToken,
+		PhoneNumberID: phoneNumberID,
+	}, nil
+}
+
+func sendMetaTemplate(job *ProcessCampaignJob, companyID int) (bool, error) {
+	if !job.MetaTemplate || job.TemplateName == "" {
+		return false, nil
+	}
+	config, err := getMetaConfig(companyID)
+	if err != nil {
+		return false, err
+	}
+	language := job.TemplateLanguage
+	if language == "" {
+		language = "pt_BR"
+	}
+
+	payload := map[string]interface{}{
+		"messaging_product": "whatsapp",
+		"to":                job.Phone,
+		"type":              "template",
+		"template": map[string]interface{}{
+			"name": job.TemplateName,
+			"language": map[string]string{
+				"code": language,
+			},
+		},
+	}
+
+	components := make([]map[string]interface{}, 0)
+	if job.HeaderFormat != "" && job.HeaderMediaURL != "" {
+		headerType := strings.ToUpper(job.HeaderFormat)
+		switch headerType {
+		case "IMAGE":
+			components = append(components, map[string]interface{}{
+				"type": "header",
+				"parameters": []map[string]interface{}{
+					{
+						"type":  "image",
+						"image": map[string]string{"link": job.HeaderMediaURL},
+					},
+				},
+			})
+		case "VIDEO":
+			components = append(components, map[string]interface{}{
+				"type": "header",
+				"parameters": []map[string]interface{}{
+					{
+						"type":  "video",
+						"video": map[string]string{"link": job.HeaderMediaURL},
+					},
+				},
+			})
+		case "DOCUMENT":
+			components = append(components, map[string]interface{}{
+				"type": "header",
+				"parameters": []map[string]interface{}{
+					{
+						"type":     "document",
+						"document": map[string]string{"link": job.HeaderMediaURL},
+					},
+				},
+			})
+		}
+	}
+
+	if len(job.TemplateParameters) > 0 {
+		parameters := make([]map[string]string, 0, len(job.TemplateParameters))
+		for _, value := range job.TemplateParameters {
+			parameters = append(parameters, map[string]string{
+				"type": "text",
+				"text": value,
+			})
+		}
+		components = append(components, map[string]interface{}{
+			"type":       "body",
+			"parameters": parameters,
+		})
+	}
+
+	if len(job.TemplateButtonParameters) > 0 {
+		indexes := make([]int, 0, len(job.TemplateButtonParameters))
+		for key := range job.TemplateButtonParameters {
+			index, err := strconv.Atoi(key)
+			if err != nil {
+				continue
+			}
+			indexes = append(indexes, index)
+		}
+		sort.Ints(indexes)
+		for _, index := range indexes {
+			value := job.TemplateButtonParameters[strconv.Itoa(index)]
+			if value == "" {
+				continue
+			}
+			buttonType := "url"
+			if job.TemplateButtonTypes != nil {
+				if t, ok := job.TemplateButtonTypes[strconv.Itoa(index)]; ok && t != "" {
+					buttonType = strings.ToLower(t)
+				}
+			}
+			if buttonType == "quick_reply" {
+				components = append(components, map[string]interface{}{
+					"type":     "button",
+					"sub_type": "quick_reply",
+					"index":    strconv.Itoa(index),
+					"parameters": []map[string]string{
+						{
+							"type":    "payload",
+							"payload": value,
+						},
+					},
+				})
+				continue
+			}
+			if buttonType == "copy_code" {
+				components = append(components, map[string]interface{}{
+					"type":     "button",
+					"sub_type": "copy_code",
+					"index":    strconv.Itoa(index),
+					"parameters": []map[string]string{
+						{
+							"type":        "coupon_code",
+							"coupon_code": value,
+						},
+					},
+				})
+				continue
+			}
+			components = append(components, map[string]interface{}{
+				"type":     "button",
+				"sub_type": "url",
+				"index":    strconv.Itoa(index),
+				"parameters": []map[string]string{
+					{
+						"type": "text",
+						"text": value,
+					},
+				},
+			})
+		}
+	}
+
+	if len(components) > 0 {
+		template := payload["template"].(map[string]interface{})
+		template["components"] = components
+	}
+
+	graphBase := os.Getenv("META_GRAPH_BASE")
+	if graphBase == "" {
+		graphBase = "https://graph.facebook.com"
+	}
+	graphVersion := os.Getenv("META_GRAPH_VERSION")
+	if graphVersion == "" {
+		graphVersion = "v18.0"
+	}
+	apiURL := fmt.Sprintf("%s/%s/%s/messages", graphBase, graphVersion, config.PhoneNumberID)
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return false, fmt.Errorf("erro ao converter payload Meta: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return false, fmt.Errorf("erro ao criar requisicao Meta: %v", err)
+	}
+	req.Header.Add("Authorization", "Bearer "+config.AccessToken)
+	req.Header.Add("Content-Type", "application/json")
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("erro ao enviar requisicao Meta: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		bodyBytes, _ := ioutil.ReadAll(res.Body)
+		return false, fmt.Errorf("erro Meta status %d: %s", res.StatusCode, string(bodyBytes))
+	}
+
+	// Auto reply (texto + mídia) só é enviado quando o contato RESPONDER (via webhook Meta)
+	return true, nil
+}
+
+func sendMetaDocumentMessage(config *MetaConfig, phone string, documentURL string) (bool, error) {
+	if config == nil || config.AccessToken == "" || config.PhoneNumberID == "" {
+		return false, fmt.Errorf("Dados de Meta incompletos")
+	}
+	if strings.TrimSpace(phone) == "" || strings.TrimSpace(documentURL) == "" {
+		return false, fmt.Errorf("Dados inválidos para envio de documento")
+	}
+
+	parsedURL, _ := url.Parse(documentURL)
+	filename := filepath.Base(parsedURL.Path)
+	if filename == "" || filename == "." {
+		filename = "documento.pdf"
+	}
+
+	payload := map[string]interface{}{
+		"messaging_product": "whatsapp",
+		"to":                phone,
+		"type":              "document",
+		"document": map[string]interface{}{
+			"link":     documentURL,
+			"filename": filename,
+		},
+	}
+
+	graphBase := os.Getenv("META_GRAPH_BASE")
+	if graphBase == "" {
+		graphBase = "https://graph.facebook.com"
+	}
+	graphVersion := os.Getenv("META_GRAPH_VERSION")
+	if graphVersion == "" {
+		graphVersion = "v18.0"
+	}
+	apiURL := fmt.Sprintf("%s/%s/%s/messages", graphBase, graphVersion, config.PhoneNumberID)
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return false, fmt.Errorf("erro ao converter payload documento: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return false, fmt.Errorf("erro ao criar requisição documento: %v", err)
+	}
+	req.Header.Add("Authorization", "Bearer "+config.AccessToken)
+	req.Header.Add("Content-Type", "application/json")
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("erro ao enviar documento: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		bodyBytes, _ := ioutil.ReadAll(res.Body)
+		return false, fmt.Errorf("erro documento status %d: %s", res.StatusCode, string(bodyBytes))
+	}
+
+	return true, nil
+}
+
 func getCampaignSendsPendentes(campaignID int) ([]CampaignSend, error) {
 	dsn, err := getDSN()
 	if err != nil {
@@ -259,6 +584,19 @@ func getCampaignSendsPendentes(campaignID int) ([]CampaignSend, error) {
 		lista = append(lista, cs)
 	}
 	return lista, nil
+}
+
+func finalizeCampaignIfDone(campaignID int) {
+	restantes, err := getCampaignSendsPendentes(campaignID)
+	if err != nil {
+		fmt.Printf("Erro ao verificar pendentes da campanha %d: %v\n", campaignID, err)
+		return
+	}
+	if len(restantes) == 0 {
+		updateCampaignStatus(campaignID, "enviado")
+		resetMessagesSent(campaignID)
+		fmt.Printf("Campanha %d finalizada.\n", campaignID)
+	}
 }
 
 type CampaignSend struct {

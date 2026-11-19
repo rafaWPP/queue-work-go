@@ -5,6 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/fatih/color"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/joho/godotenv"
+	"go-queue/common" // IMPORTANTE: use o mesmo caminho definido no go.mod
+	"go-queue/web"
 	"io/fs"
 	"io/ioutil"
 	"os"
@@ -13,12 +18,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"go-queue/web" 
-
-	"go-queue/common" // IMPORTANTE: use o mesmo caminho definido no go.mod
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/fatih/color"
-	"github.com/joho/godotenv"
 )
 
 // Config é a estrutura para carregar a configuração das filas.
@@ -28,10 +27,9 @@ type Config struct {
 
 // loadEnvConfig carrega as variáveis do arquivo .env (para DB e outras).
 func loadEnvConfig() (string, string, string, string, string, error) {
-	err := godotenv.Load()
-	if err != nil {
-		logFatal("erro ao carregar arquivo .env")
-		return "", "", "", "", "", fmt.Errorf("erro ao carregar arquivo .env")
+	// O arquivo .env e opcional: containers e CI podem injetar variaveis diretamente.
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		return "", "", "", "", "", fmt.Errorf("erro ao carregar arquivo .env: %w", err)
 	}
 
 	DBUser := os.Getenv("DB_USER")
@@ -110,28 +108,25 @@ func runMigrations(db *sql.DB) error {
 		path := filepath.Join(migrationDir, migrationName)
 		sqlQuery, err := ioutil.ReadFile(path)
 		if err != nil {
-			logError("erro ao ler arquivo de migração %s: %v", migrationName, err)
-			continue
+			return fmt.Errorf("erro ao ler arquivo de migração %s: %w", migrationName, err)
 		}
 
 		_, err = db.Exec(string(sqlQuery))
 		if err != nil {
-			logError("erro ao executar migração %s: %v", migrationName, err)
-			continue
+			return fmt.Errorf("erro ao executar migração %s: %w", migrationName, err)
 		}
 
 		_, err = db.Exec("INSERT INTO migrations_go (migration) VALUES (?)", migrationName)
 		if err != nil {
-			logError("erro ao registrar migração %s: %v", migrationName, err)
-			continue
+			return fmt.Errorf("erro ao registrar migração %s: %w", migrationName, err)
 		}
 
 		logInfo("---%s", migrationName)
 		logInfo("---|___Sucesso\n\n")
 	}
 
-// Define um logo em ASCII centralizado
-logo := `
+	// Define um logo em ASCII centralizado
+	logo := `
 ██╗    ██╗███████╗██████╗ ████████╗███████╗ ██████╗██╗  ██╗   v.1.0.0
 ██║    ██║██╔════╝██╔══██╗╚══██╔══╝██╔════╝██╔════╝██║  ██║  
 ██║ █╗ ██║█████╗  ██████╔╝   ██║   █████╗  ██║     ███████║  
@@ -140,9 +135,9 @@ logo := `
  ╚══╝╚══╝ ╚══════╝╚═════╝    ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝
 	        DEVELOPER BY RD-WEBTECH
 `
- // Exibe o logo colorido
- logInfo(logo)
- logInfo("WebTech Queues started successfully\n\n")
+	// Exibe o logo colorido
+	logInfo(logo)
+	logInfo("WebTech Queues started successfully\n\n")
 	return nil
 }
 
@@ -194,36 +189,90 @@ func formatJobLog(job, suffix string) string {
 	return fmt.Sprintf("%s %s %s", job, dots, suffix)
 }
 
-// processQueue processa uma tarefa de uma fila configurada.
-func processQueue(db *sql.DB, queueName string) {
-	rows, err := db.Query("SELECT id, task_name, data FROM queue_tasks WHERE status = 'pending' AND queue_name = ? LIMIT 1", queueName)
+// claimNextTask reserva uma tarefa de forma atomica para evitar que workers
+// concorrentes executem o mesmo job. Requer MySQL 8+ (SKIP LOCKED).
+func claimNextTask(db *sql.DB, queueName string) (int, string, string, bool, error) {
+	tx, err := db.Begin()
 	if err != nil {
-		logError("Erro ao buscar tarefas da fila %s: %v", queueName, err)
-		return
+		return 0, "", "", false, err
 	}
-	defer rows.Close()
-
-	if !rows.Next() {
-		return
-	}
+	defer tx.Rollback()
 
 	var taskID int
 	var taskName, data string
-	if err := rows.Scan(&taskID, &taskName, &data); err != nil {
-		logError("Erro ao escanear tarefa na fila %s: %v", queueName, err)
+	err = tx.QueryRow(`SELECT id, task_name, data FROM queue_tasks
+		WHERE status = 'pending' AND queue_name = ?
+		AND (available_at IS NULL OR available_at <= NOW())
+		ORDER BY available_at ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED`, queueName).
+		Scan(&taskID, &taskName, &data)
+	if err == sql.ErrNoRows {
+		return 0, "", "", false, nil
+	}
+	if err != nil {
+		return 0, "", "", false, err
+	}
+	result, err := tx.Exec("UPDATE queue_tasks SET status = 'processing' WHERE id = ? AND status = 'pending'", taskID)
+	if err != nil {
+		return 0, "", "", false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, "", "", false, err
+	}
+	if n != 1 {
+		return 0, "", "", false, fmt.Errorf("reserva inconsistente da tarefa %d", taskID)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, "", "", false, err
+	}
+	return taskID, taskName, data, true, nil
+}
+
+// validatedPluginPath confines job plugins to the local jobs directory.
+// Task producers must still be trusted: loading a .so executes native code.
+func validatedPluginPath(taskName string) (string, error) {
+	if taskName == "" || filepath.IsAbs(taskName) || strings.Contains(taskName, "\\") || strings.Contains(taskName, ":") {
+		return "", fmt.Errorf("nome de plugin invalido")
+	}
+	clean := filepath.Clean(taskName)
+	if clean != taskName || clean == "." || strings.HasPrefix(clean, "..") {
+		return "", fmt.Errorf("caminho de plugin invalido")
+	}
+	if !strings.HasPrefix(clean, "jobs/") {
+		return "", fmt.Errorf("plugin fora do diretorio jobs")
+	}
+	for _, part := range strings.Split(clean, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("segmento de plugin invalido")
+		}
+		for _, c := range part {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+				return "", fmt.Errorf("caractere de plugin invalido")
+			}
+		}
+	}
+	return clean + ".so", nil
+}
+
+// processQueue processa uma tarefa de uma fila configurada.
+func processQueue(db *sql.DB, queueName string) {
+	taskID, taskName, data, found, err := claimNextTask(db, queueName)
+	if err != nil {
+		logError("Erro ao reservar tarefa da fila %s: %v", queueName, err)
 		return
 	}
-
-	_, err = db.Exec("UPDATE queue_tasks SET status = 'processing' WHERE id = ?", taskID)
-	if err != nil {
-		logError("Erro ao atualizar tarefa para 'processing' na fila %s: %v", queueName, err)
+	if !found {
 		return
 	}
 
 	startTime := time.Now()
 	logInfo(formatJobLog(taskName, "RUNNING"))
 
-	pluginPath := fmt.Sprintf("%s.so", taskName)
+	pluginPath, err := validatedPluginPath(taskName)
+	if err != nil {
+		common.LogJobError(db, taskID, taskName, err)
+		return
+	}
 	p, err := plugin.Open(pluginPath)
 	if err != nil {
 		common.LogJobError(db, taskID, taskName, fmt.Errorf("erro ao abrir plugin %s: %v", pluginPath, err))
@@ -266,34 +315,27 @@ func processQueue(db *sql.DB, queueName string) {
 // processNonConfiguredQueue faz a mesma lógica de processQueue para filas não configuradas.
 func processNonConfiguredQueue(db *sql.DB, queueName string) {
 	for {
-		rows, err := db.Query("SELECT id, task_name, data FROM queue_tasks WHERE status = 'pending' AND queue_name = ? LIMIT 1", queueName)
+		taskID, taskName, data, found, err := claimNextTask(db, queueName)
 		if err != nil {
-			logError("Erro ao buscar tarefa na fila %s (não configurada): %v", queueName, err)
+			logError("Erro ao reservar tarefa da fila %s: %v", queueName, err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		if !rows.Next() {
-			rows.Close()
+		if !found {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		var taskID int
-		var taskName, data string
-		if err := rows.Scan(&taskID, &taskName, &data); err != nil {
-			logError("Erro ao escanear tarefa na fila %s (não configurada): %v", queueName, err)
-			rows.Close()
-			continue
-		}
-		rows.Close()
-		_, err = db.Exec("UPDATE queue_tasks SET status = 'processing' WHERE id = ?", taskID)
-		if err != nil {
-			db.Exec("UPDATE queue_tasks SET exception = ? WHERE id = ?", fmt.Sprintf("Erro ao atualizar para processing: %v", err), taskID)
-			logError("Erro ao atualizar tarefa para 'processing' na fila %s (não configurada): %v", queueName, err)
-			continue
-		}
+
 		startTime := time.Now()
 		logInfo(formatJobLog(taskName, "RUNNING"))
-		pluginPath := fmt.Sprintf("%s.so", taskName)
+		pluginPath, err := validatedPluginPath(taskName)
+		if err != nil {
+			_, updateErr := db.Exec("UPDATE queue_tasks SET status = 'failed', exception = ? WHERE id = ?", err.Error(), taskID)
+			if updateErr != nil {
+				logError("Erro ao registrar plugin invalido para tarefa %d: %v", taskID, updateErr)
+			}
+			continue
+		}
 		var processingError error
 		p, err := plugin.Open(pluginPath)
 		if err != nil {
@@ -308,7 +350,11 @@ func processNonConfiguredQueue(db *sql.DB, queueName string) {
 					processingError = fmt.Errorf("o símbolo New do plugin %s tem assinatura inválida", pluginPath)
 				} else {
 					job := newFunc([]byte(data))
-					processingError = job.Handle()
+					if job == nil {
+						processingError = fmt.Errorf("erro ao criar instância do job %s", taskName)
+					} else {
+						processingError = job.Handle()
+					}
 				}
 			}
 		}
@@ -336,12 +382,40 @@ func processNonConfiguredQueue(db *sql.DB, queueName string) {
 	}
 }
 
+func recoverStuckProcessingTasks(db *sql.DB, maxAge time.Duration) {
+	query := `
+		UPDATE queue_tasks
+		SET status = 'failed',
+		    exception = ?,
+		    updated_at = NOW()
+		WHERE status = 'processing'
+		  AND updated_at < ?
+	`
+
+	cutoff := time.Now().Add(-maxAge)
+	message := fmt.Sprintf("Task travada em processing por mais de %s", maxAge)
+	result, err := db.Exec(query, message, cutoff)
+	if err != nil {
+		logError("Erro ao recuperar tasks travadas: %v", err)
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		logError("Erro ao obter quantidade de tasks travadas recuperadas: %v", err)
+		return
+	}
+	if rowsAffected > 0 {
+		logWarning("Recuperadas %d task(s) travadas em processing com mais de %s", rowsAffected, maxAge)
+	}
+}
+
 func getDistinctNonConfiguredQueueNames(db *sql.DB, knownQueues []string) ([]string, error) {
 	placeholders := strings.Repeat("?,", len(knownQueues))
 	if len(knownQueues) > 0 {
 		placeholders = placeholders[:len(placeholders)-1]
 	}
-	query := fmt.Sprintf("SELECT DISTINCT queue_name FROM queue_tasks WHERE status = 'pending' AND queue_name NOT IN (%s)", placeholders)
+	query := fmt.Sprintf("SELECT DISTINCT queue_name FROM queue_tasks WHERE status = 'pending' AND (available_at IS NULL OR available_at <= NOW()) AND queue_name NOT IN (%s)", placeholders)
 	args := make([]interface{}, len(knownQueues))
 	for i, q := range knownQueues {
 		args[i] = q
@@ -433,7 +507,7 @@ func main() {
 	if err != nil {
 		logFatal("Erro ao carregar configuração das filas")
 	}
-	
+
 	for _, queue := range queues {
 		go func(q string) {
 			for {
@@ -443,8 +517,14 @@ func main() {
 		}(queue)
 	}
 	go monitorNonConfiguredQueues(db, queues)
+	go func() {
+		for {
+			recoverStuckProcessingTasks(db, 30*time.Minute)
+			time.Sleep(5 * time.Minute)
+		}
+	}()
 
 	go web.Start()
-	
+
 	select {}
 }

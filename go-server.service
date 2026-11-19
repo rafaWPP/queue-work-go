@@ -3,13 +3,13 @@ Description=Servidor Go WEBTECH QUEUES
 After=network.target
 
 [Service]
-ExecStart=/home/go-queue/webtech-queue
-WorkingDirectory=/home/go-queue
+ExecStart=/home/wagestor-devnewgestor/htdocs/queue-work-go/webtech-queue
+WorkingDirectory=/home/wagestor-devnewgestor/htdocs/queue-work-go
 Restart=always
 RestartSec=5
 User=wagestor-devnewgestor
 Group=wagestor-devnewgestor
-EnvironmentFile=/home/go-queue/.env
+EnvironmentFile=/home/wagestor-devnewgestor/htdocs/queue-work-go/.env
 
 [Install]
 WantedBy=multi-user.target

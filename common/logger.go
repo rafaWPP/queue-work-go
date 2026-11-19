@@ -39,3 +39,23 @@ func LogJobError(db *sql.DB, taskID int, taskName string, err error) {
 		log.Println("Erro ao atualizar status de falha no banco:", dbErr)
 	}
 }
+
+// LogWorkerSyncIssue registra inconsistências entre o worker e as tabelas
+// de rastreio de envio para investigação posterior.
+func LogWorkerSyncIssue(format string, args ...interface{}) {
+	message := fmt.Sprintf(format, args...)
+	entry := fmt.Sprintf("[%s] %s", time.Now().Format("2006-01-02 15:04:05"), message)
+
+	log.Println(entry)
+
+	file, err := os.OpenFile("worker_sync_errors.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Println("Erro ao abrir worker_sync_errors.log:", err)
+		return
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(entry + "\n"); err != nil {
+		log.Println("Erro ao escrever em worker_sync_errors.log:", err)
+	}
+}
