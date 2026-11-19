@@ -40,7 +40,7 @@ INSERT INTO queue_tasks (queue_name, task_name, data, status)
 VALUES ('default', 'jobs/example', '{"message":"hello"}', 'pending');
 ```
 
-O caminho do plugin acima é apenas ilustrativo; crie e compile `jobs/example.go` antes de executá-lo.
+O caminho acima é ilustrativo. Para um plugin funcional e independente de integrações comerciais, consulte [examples/hello](examples/hello/README.md).
 
 ## Desenvolvimento local
 
@@ -70,12 +70,12 @@ Use variáveis de ambiente para `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_
 
 ## Estado do projeto e roadmap
 
-- [x] Testes unitários iniciais da autenticação e workflow de CI (execução ainda não verificada)
-- [ ] Testes automatizados de concorrência e integração com MariaDB
+- [x] Testes unitários iniciais da autenticação e workflow de CI (execução aprovada no commit `f2ff993`)
+- [x] Teste inicial de reserva concorrente com MariaDB 10.11 (não cobre falhas externas)
 - [ ] Sessões seguras no painel, sem token em URL
 - [ ] Política documentada de retry, heartbeat e idempotência
 - [ ] Separar o motor genérico das integrações específicas de cada produto
-- [ ] Exemplos independentes de sistemas comerciais
+- [x] Exemplo inicial de plugin independente de sistemas comerciais
 - [ ] Benchmarks reproduzíveis e releases versionadas
 - [x] Adicionar licença MIT
 
@@ -89,7 +89,7 @@ Licenciado sob a **MIT License**. Consulte o arquivo [LICENSE](LICENSE).
 
 ## Integração contínua
 
-A branch de melhorias inclui o workflow [Go CI](.github/workflows/go-ci.yml), com testes e compilação de pacotes. **A existência do workflow não confirma que ele já passou:** consulte a aba Actions do GitHub para conferir a execução. Ainda faltam testes reais de integração com MariaDB e de concorrência.
+A branch de melhorias inclui o workflow [Go CI](.github/workflows/go-ci.yml), com testes e compilação de pacotes. **A existência do workflow não confirma que ele já passou:** consulte a aba Actions do GitHub para conferir a execução. O workflow passou no commit `f2ff993`; mudanças posteriores precisam de nova validação. Ainda faltam testes de recuperação, falhas externas e uma matriz de compatibilidade.
 
 ## Limites de segurança e confiabilidade
 
