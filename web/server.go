@@ -1,7 +1,6 @@
 package web
 
 import (
-	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -100,27 +99,14 @@ func getDSN() string {
 	)
 }
 
-// checkAuth verifica se o parâmetro "auth" da URL corresponde à chave definida no ambiente.
-func checkAuth(w http.ResponseWriter, r *http.Request) bool {
-	secret := os.Getenv("AUTH")
-	provided := r.URL.Query().Get("auth")
-	// Compatibilidade temporaria com links existentes; migrar para sessoes.
-	if secret == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) != 1 {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return false
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	return true
-}
-
 func redirectBackToPage(w http.ResponseWriter, r *http.Request, fallbackPath string) {
-	auth := r.URL.Query().Get("auth")
-	redirectPath := r.URL.Query().Get("redirect")
-	if redirectPath == "" {
+	redirectPath := r.FormValue("redirect")
+	switch redirectPath {
+	case "/", "/queues", "/queues_failed", "/queues_completed":
+	default:
 		redirectPath = fallbackPath
 	}
-	http.Redirect(w, r, redirectPath+"?auth="+auth, http.StatusSeeOther)
+	http.Redirect(w, r, redirectPath, http.StatusSeeOther)
 }
 
 // ---------------------
@@ -585,7 +571,7 @@ func fetchCompletedTasks(page, pageSize int) ([]CompletedTask, Pagination, error
 // ---------------------
 
 func ClearActiveHandler(w http.ResponseWriter, r *http.Request) {
-	if !checkAuth(w, r) {
+	if !checkAuth(w, r) || !requirePost(w, r) {
 		return
 	}
 	dsn := getDSN()
@@ -605,7 +591,7 @@ func ClearActiveHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func ClearFailedHandler(w http.ResponseWriter, r *http.Request) {
-	if !checkAuth(w, r) {
+	if !checkAuth(w, r) || !requirePost(w, r) {
 		return
 	}
 	dsn := getDSN()
@@ -625,7 +611,7 @@ func ClearFailedHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func ClearCompletedHandler(w http.ResponseWriter, r *http.Request) {
-	if !checkAuth(w, r) {
+	if !checkAuth(w, r) || !requirePost(w, r) {
 		return
 	}
 	dsn := getDSN()
@@ -1366,7 +1352,7 @@ const baseTemplate = `
 </head>
 <body>
   <div class="topbar">
-    <a class="topbar-logo" href="/?auth={{.AuthKey}}">
+    <a class="topbar-logo" href="/">
       <img src="/logo-queu.png" alt="WebTech Queues">
     </a>
   </div>
@@ -1375,10 +1361,10 @@ const baseTemplate = `
       <div class="sidebar-card">
         <div class="sidebar-head">Navegação</div>
         <div class="nav-links">
-          <a href="/?auth={{.AuthKey}}" class="{{if eq .Page "home"}}active{{end}}">Dashboard</a>
-          <a href="/queues?auth={{.AuthKey}}" class="{{if eq .Page "queues"}}active{{end}}">Agendados</a>
-          <a href="/queues_failed?auth={{.AuthKey}}" class="{{if eq .Page "failed"}}active{{end}}">Falhas</a>
-          <a href="/queues_completed?auth={{.AuthKey}}" class="{{if eq .Page "completed"}}active{{end}}">Concluídas</a>
+          <a href="/" class="{{if eq .Page "home"}}active{{end}}">Dashboard</a>
+          <a href="/queues" class="{{if eq .Page "queues"}}active{{end}}">Agendados</a>
+          <a href="/queues_failed" class="{{if eq .Page "failed"}}active{{end}}">Falhas</a>
+          <a href="/queues_completed" class="{{if eq .Page "completed"}}active{{end}}">Concluídas</a>
           <button onclick="location.reload()">Atualizar</button>
         </div>
       </div>
@@ -1397,7 +1383,7 @@ const baseTemplate = `
       <p id="confirmModalText">Deseja continuar?</p>
       <div class="confirm-actions">
         <button class="button-secondary" type="button" onclick="closeConfirmModal()">Cancelar</button>
-        <a id="confirmModalAction" class="button-danger" href="#">Confirmar</a>
+        <a id="confirmModalAction" onclick="submitClearAction(event)" class="button-danger" href="#">Confirmar</a>
       </div>
     </div>
   </div>
@@ -1426,8 +1412,21 @@ const baseTemplate = `
   <script>
     function openConfirmModal(href, message) {
       document.getElementById("confirmModalText").textContent = message || "Deseja continuar?";
-      document.getElementById("confirmModalAction").setAttribute("href", href);
+      document.getElementById("confirmModalAction").dataset.clearUrl = href;
       document.getElementById("confirmModal").style.display = "flex";
+    }
+
+    async function submitClearAction(event) {
+      event.preventDefault();
+      const target = document.getElementById("confirmModalAction").dataset.clearUrl;
+      if (!target || !target.startsWith("/clear/")) return;
+      try {
+        const response = await fetch(target, { method: "POST", credentials: "same-origin" });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        window.location.assign(response.url);
+      } catch (error) {
+        alert("Não foi possível limpar a fila: " + error.message);
+      }
     }
 
     function closeConfirmModal() {
@@ -1511,7 +1510,7 @@ const baseTemplate = `
       const trigger = event.target.closest("[data-confirm-action]");
       if (!trigger) return;
       event.preventDefault();
-      openConfirmModal(trigger.getAttribute("href"), trigger.getAttribute("data-confirm-message"));
+      openConfirmModal(trigger.getAttribute("data-clear-url"), trigger.getAttribute("data-confirm-message"));
     });
   </script>
 </body>
@@ -1527,8 +1526,8 @@ const homeTemplateCards = `
       <h1>WebTech Queues</h1>
       <p class="hero-copy">Fila, monitoramento e recuperação. Um painel operacional para acompanhar agendamentos, falhas, histórico e estabilidade do worker em um fluxo mais claro.</p>
       <div class="hero-actions">
-        <a class="button-primary" href="/queues?auth={{.AuthKey}}">Abrir agendados</a>
-        <a class="button-secondary" href="/queues_failed?auth={{.AuthKey}}">Ver falhas</a>
+        <a class="button-primary" href="/queues">Abrir agendados</a>
+        <a class="button-secondary" href="/queues_failed">Ver falhas</a>
       </div>
     </div>
     <div class="hero-art">
@@ -1542,30 +1541,30 @@ const homeTemplateCards = `
       <div class="stat-label">Filas Ativas</div>
       <div class="stat-value" id="activeCount">{{.ActiveCount}}</div>
       <div class="stat-actions">
-        <a class="button-secondary" href="/queues?auth={{.AuthKey}}">Abrir fila</a>
-        <a class="button-danger" href="/clear/active?auth={{.AuthKey}}&redirect=/" data-confirm-action="true" data-confirm-message="Limpar todas as tasks ativas e agendadas?">Limpar</a>
+        <a class="button-secondary" href="/queues">Abrir fila</a>
+        <button type="button" class="button-danger" data-clear-url="/clear/active?redirect=/" data-confirm-action="true" data-confirm-message="Limpar todas as tasks ativas e agendadas?">Limpar</button>
       </div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Falhas</div>
       <div class="stat-value" id="failedCount">{{.FailedCount}}</div>
       <div class="stat-actions">
-        <a class="button-secondary" href="/queues_failed?auth={{.AuthKey}}">Ver falhas</a>
-        <a class="button-danger" href="/clear/failed?auth={{.AuthKey}}&redirect=/" data-confirm-action="true" data-confirm-message="Limpar todas as tasks com falha?">Limpar</a>
+        <a class="button-secondary" href="/queues_failed">Ver falhas</a>
+        <button type="button" class="button-danger" data-clear-url="/clear/failed?redirect=/" data-confirm-action="true" data-confirm-message="Limpar todas as tasks com falha?">Limpar</button>
       </div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Concluídas</div>
       <div class="stat-value" id="completedCount">{{.CompletedCount}}</div>
       <div class="stat-actions">
-        <a class="button-secondary" href="/queues_completed?auth={{.AuthKey}}">Ver histórico</a>
-        <a class="button-danger" href="/clear/completed?auth={{.AuthKey}}&redirect=/" data-confirm-action="true" data-confirm-message="Limpar todo o histórico de concluídas?">Limpar</a>
+        <a class="button-secondary" href="/queues_completed">Ver histórico</a>
+        <button type="button" class="button-danger" data-clear-url="/clear/completed?redirect=/" data-confirm-action="true" data-confirm-message="Limpar todo o histórico de concluídas?">Limpar</button>
       </div>
     </div>
   </div>
   <script>
     function updateCounts() {
-      fetch('/api/counts?auth={{.AuthKey}}')
+      fetch('/api/counts')
         .then(response => response.json())
         .then(data => {
           document.getElementById("activeCount").textContent = data.active;
@@ -1585,7 +1584,7 @@ const queuesTemplate = `
 {{define "content"}}
   <div class="section-head">
     <div><h1>Tasks Agendadas</h1></div>
-    <a class="button-danger" href="/clear/active?auth={{.AuthKey}}&redirect=/queues" data-confirm-action="true" data-confirm-message="Limpar todas as tasks ativas e agendadas?">Limpar</a>
+    <button type="button" class="button-danger" data-clear-url="/clear/active?redirect=/queues" data-confirm-action="true" data-confirm-message="Limpar todas as tasks ativas e agendadas?">Limpar</button>
   </div>
   <div id="activeQueuesContent" class="table-shell"></div>
   <script>
@@ -1897,7 +1896,7 @@ const queuesTemplate = `
       if (activeQueuesFirstLoad) {
         document.getElementById("activeQueuesContent").innerHTML = renderLoadingState("Carregando tasks...");
       }
-      fetch('/api/queues?auth={{.AuthKey}}')
+      fetch('/api/queues')
         .then(response => response.json())
         .then(data => {
           latestActiveQueuesData = data;
@@ -1923,7 +1922,7 @@ const failedTemplate = `
 {{define "content"}}
   <div class="section-head">
     <div><h1>Falhas do Worker</h1></div>
-    <a class="button-danger" href="/clear/failed?auth={{.AuthKey}}&redirect=/queues_failed" data-confirm-action="true" data-confirm-message="Limpar todas as tasks com falha?">Limpar</a>
+    <button type="button" class="button-danger" data-clear-url="/clear/failed?redirect=/queues_failed" data-confirm-action="true" data-confirm-message="Limpar todas as tasks com falha?">Limpar</button>
   </div>
   <div id="failedShell" class="table-shell">
     <table>
@@ -2035,7 +2034,7 @@ const failedTemplate = `
       if (failedFirstLoad) {
         document.getElementById('failedShell').innerHTML = renderLoadingState("Carregando falhas...");
       }
-      fetch('/api/queues_failed?auth={{.AuthKey}}&page=' + failedPage + '&page_size=' + failedPageSize)
+      fetch('/api/queues_failed?page=' + failedPage + '&page_size=' + failedPageSize)
         .then(res => res.json())
         .then(data => {
           const shell = document.getElementById('failedShell');
@@ -2087,7 +2086,7 @@ const completedTemplate = `
 {{define "content"}}
   <div class="section-head">
     <div><h1>Histórico Concluído</h1></div>
-    <a class="button-danger" href="/clear/completed?auth={{.AuthKey}}&redirect=/queues_completed" data-confirm-action="true" data-confirm-message="Limpar todo o histórico de concluídas?">Limpar</a>
+    <button type="button" class="button-danger" data-clear-url="/clear/completed?redirect=/queues_completed" data-confirm-action="true" data-confirm-message="Limpar todo o histórico de concluídas?">Limpar</button>
   </div>
   <div id="completedShell" class="table-shell">
     <table>
@@ -2158,7 +2157,7 @@ const completedTemplate = `
       if (completedFirstLoad) {
         document.getElementById('completedShell').innerHTML = renderLoadingState("Carregando concluidas...");
       }
-      fetch('/api/queues_completed?auth={{.AuthKey}}&page=' + completedPage + '&page_size=' + completedPageSize)
+      fetch('/api/queues_completed?page=' + completedPage + '&page_size=' + completedPageSize)
         .then(response => response.json())
         .then(data => {
           const shell = document.getElementById('completedShell');
@@ -2236,7 +2235,7 @@ func HomeHandler(w http.ResponseWriter, r *http.Request) {
 		CompletedCount int
 	}{
 		Title:          "Dashboard - WEBTECH QUEUES",
-		AuthKey:        r.URL.Query().Get("auth"),
+		AuthKey:        "",
 		Page:           "home",
 		ActiveCount:    activeCount,
 		FailedCount:    failedCount,
@@ -2268,7 +2267,7 @@ func QueueHandler(w http.ResponseWriter, r *http.Request) {
 		Page    string
 	}{
 		Title:   "Queues Pending - WEBTECH QUEUES",
-		AuthKey: r.URL.Query().Get("auth"),
+		AuthKey: "",
 		Page:    "queues",
 	}
 	tmpl, err := template.New("base").Parse(baseTemplate)
@@ -2307,7 +2306,7 @@ func FailedQueueHandler(w http.ResponseWriter, r *http.Request) {
 		Title:      "Queues Failed - WEBTECH QUEUES",
 		Tasks:      tasks,
 		Pagination: pagination,
-		AuthKey:    r.URL.Query().Get("auth"),
+		AuthKey:    "",
 		Page:       "failed",
 	}
 	tmpl, err := template.New("base").Parse(baseTemplate)
@@ -2346,7 +2345,7 @@ func CompletedHandler(w http.ResponseWriter, r *http.Request) {
 		Title:      "Queues Completadas - WEBTECH QUEUES",
 		Tasks:      tasks,
 		Pagination: pagination,
-		AuthKey:    r.URL.Query().Get("auth"),
+		AuthKey:    "",
 		Page:       "completed",
 	}
 	tmpl, err := template.New("base").Parse(baseTemplate)
@@ -2495,6 +2494,8 @@ func Start() {
 	})
 
 	// Rotas de visualização
+	http.HandleFunc("/login", loginHandler)
+	http.HandleFunc("/logout", logoutHandler)
 	http.HandleFunc("/", HomeHandler)
 	http.HandleFunc("/queues", QueueHandler)
 	http.HandleFunc("/queues_failed", FailedQueueHandler)
